@@ -3,6 +3,12 @@ export interface AnalysisResult {
   counter: string;
   grammarian: string;
   evaluator: string;
+  /** Set by POST /api/analyze when the session row was saved to Supabase. */
+  persisted?: boolean;
+  sessionId?: string | null;
+  evaluatorScore?: number | null;
+  fillerWordCount?: number | null;
+  warning?: string;
 }
 
 export interface SelectedVoices {

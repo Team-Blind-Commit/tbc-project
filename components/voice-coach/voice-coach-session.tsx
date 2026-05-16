@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * Voice Coach persistence: chat is buffered in memory during the ElevenLabs session.
+ * Supabase writes run on End session (POST /api/voice-coach/end-session) to sessions,
+ * user_coach_memory, and action_points. Modes: Interview, Debate, Presentation,
+ * Impromptu Speaking. A sessionStorage draft is kept if the connection drops early.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Link from "next/link";
@@ -21,6 +28,10 @@ import {
   VOICE_COACH_MIC_STABILIZATION_MS,
 } from "@/lib/voice-coach-microphone";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
+import {
+  clearVoiceCoachDraft,
+  saveVoiceCoachDraft,
+} from "@/lib/voice-coach-draft";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
 type AuthMode = "signed" | "public";
@@ -796,8 +807,18 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       await endSdkSessionIfOpen();
       if (!isMountedRef.current) return;
       if (phaseRef.current === "active") {
+        const conversationId = conversationIdRef.current;
+        const draftTranscript = transcriptRef.current.join("\n").trim();
+        if (conversationId && draftTranscript) {
+          saveVoiceCoachDraft({
+            mode,
+            conversationId,
+            transcript: draftTranscript,
+            updatedAt: new Date().toISOString(),
+          });
+        }
         setNotice(
-          "Connection lost. Start again to continue, or End session to save.",
+          "Connection lost. A draft was saved in this browser — start again or End session to save to your account.",
         );
         phaseRef.current = "idle";
         setPhase("idle");
@@ -1313,6 +1334,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         setNotice("Session ended from your voice command.");
       } else {
         setNotice(null);
+      }
+      if (conversationId) {
+        clearVoiceCoachDraft(conversationId);
       }
       conversationIdRef.current = null;
       setStoredConversationId(null);

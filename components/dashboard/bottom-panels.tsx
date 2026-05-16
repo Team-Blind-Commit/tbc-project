@@ -47,11 +47,13 @@ function ScoreBar({
 export function BottomPanels({
   panelScores,
   compositeScore,
+  panelScoresNote,
   trendBars,
   recentSessions,
 }: {
   panelScores: PanelScore[];
   compositeScore: string;
+  panelScoresNote?: string;
   trendBars: number[];
   recentSessions: RecentSession[];
 }) {
@@ -59,6 +61,11 @@ export function BottomPanels({
     <div className="grid gap-5 lg:grid-cols-2">
       <article className="rounded-xl border border-white/[0.06] bg-[#1a1a24] p-6">
         <h3 className="font-semibold text-white">Last panel scores</h3>
+        {panelScoresNote ? (
+          <p className="mt-2 text-xs leading-relaxed text-[#6b7280]">
+            {panelScoresNote}
+          </p>
+        ) : null}
 
         <ul className="mt-5 space-y-4">
           {panelScores.map(({ name, initial, score, color, bar }) => (
@@ -71,7 +78,9 @@ export function BottomPanels({
               <span className="w-14 shrink-0 text-sm text-white">{name}</span>
               <ScoreBar score={score} barClass={bar} />
               <span className="w-12 shrink-0 text-right text-sm font-medium text-white">
-                {score.toFixed(1)}/10
+                {name === "Evaluator" || score > 0
+                  ? `${score.toFixed(1)}/10`
+                  : "—"}
               </span>
             </li>
           ))}

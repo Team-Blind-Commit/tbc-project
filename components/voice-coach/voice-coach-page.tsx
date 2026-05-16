@@ -1,5 +1,7 @@
 "use client";
 
+/** Mode picker only — live chat and Supabase saves live in VoiceCoachSession. */
+
 import { useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";

@@ -29,7 +29,9 @@ export default function SpeechEvalPage() {
     voices: SelectedVoices,
     durationSeconds: number,
   ) {
-    saveLocalSession(topic, analysis, durationSeconds);
+    if (!analysis.persisted) {
+      saveLocalSession(topic, analysis, durationSeconds);
+    }
     setResult(analysis);
     setSelectedVoices(voices);
     setStage("feedback");

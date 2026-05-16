@@ -313,6 +313,19 @@ export function FeedbackCards({ result, selectedVoices }: FeedbackCardsProps) {
   return (
     <PlaybackContext.Provider value={coordinator}>
       <div className="mx-auto w-full max-w-5xl space-y-8">
+        {result.warning ? (
+          <p
+            className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            role="status"
+          >
+            {result.warning}
+          </p>
+        ) : null}
+        {result.persisted ? (
+          <p className="text-center text-xs text-emerald-400/90" role="status">
+            Session saved to your account history.
+          </p>
+        ) : null}
         <div className="grid gap-5 md:grid-cols-3">
           {cards.map((card) => (
             <FeedbackCard key={card.role} config={card} />

@@ -4,6 +4,7 @@ import { getGroq } from "@/lib/groq";
 import { getOpenAI } from "@/lib/openai";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/supabase/require-user";
+import { resolveFillerWordCount } from "@/lib/filler-words";
 import { assessTranscriptQuality } from "@/lib/transcript-quality";
 
 const JUDGE_VOICE_RULES = `Speak in first person to the speaker, like a supportive coach at a club meeting — warm, specific, never dismissive. This will be read aloud via text-to-speech, so use natural spoken sentences (no bullet lists, no markdown). Aim for 5–7 sentences; stay under ~110 words so it stays listenable.`;
@@ -277,11 +278,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    try {
-      const supabase = await createClient();
-      const evaluatorScore = extractScore(evaluator);
+    const evaluatorScore = extractScore(evaluator);
+    const fillerWordCount = resolveFillerWordCount(transcript, counter);
 
-      await supabase.from("sessions").insert({
+    let persisted = false;
+    let sessionId: string | null = null;
+    let saveWarning: string | undefined;
+
+    const supabase = await createClient();
+    const { data: sessionRow, error: saveError } = await supabase
+      .from("sessions")
+      .insert({
         user_id: user.id,
         topic: topicStr,
         feature: "speech_eval",
@@ -290,15 +297,32 @@ export async function POST(request: NextRequest) {
         counter_feedback: counter,
         grammarian_feedback: grammarian,
         evaluator_feedback: evaluator,
-        ...(evaluatorScore !== null
-          ? { evaluator_score: evaluatorScore }
-          : {}),
-      });
-    } catch (saveError) {
-      console.error("[analyze] save session error:", saveError);
+        filler_word_count: fillerWordCount,
+        ...(evaluatorScore !== null ? { evaluator_score: evaluatorScore } : {}),
+      })
+      .select("id")
+      .single();
+
+    if (saveError) {
+      console.error("[analyze] save session error:", saveError.message);
+      saveWarning =
+        "Feedback is ready, but saving to your account history failed. Try again later.";
+    } else {
+      persisted = true;
+      sessionId = (sessionRow?.id as string | undefined) ?? null;
     }
 
-    return NextResponse.json({ transcript, counter, grammarian, evaluator });
+    return NextResponse.json({
+      transcript,
+      counter,
+      grammarian,
+      evaluator,
+      persisted,
+      sessionId,
+      evaluatorScore,
+      fillerWordCount,
+      ...(saveWarning ? { warning: saveWarning } : {}),
+    });
   } catch (error) {
     console.error("[analyze] error:", error);
     const message =

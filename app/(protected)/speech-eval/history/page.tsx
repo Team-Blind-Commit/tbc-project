@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { FILLER_WORDS } from "@/lib/speech-eval";
+import { countFillerInText } from "@/lib/filler-words";
 import {
   getLocalSessions,
   mergeSessions,
@@ -32,28 +32,6 @@ function extractScore(feedback: string): number | null {
   if (!match) return null;
   const score = Math.round(Number.parseFloat(match[1]));
   return score >= 0 && score <= 10 ? score : null;
-}
-
-function countFillerInText(text: string): Record<string, number> {
-  const lower = text.toLowerCase();
-  const counts: Record<string, number> = {};
-
-  const sorted = [...FILLER_WORDS].sort((a, b) => b.length - a.length);
-  let remaining = lower;
-
-  for (const filler of sorted) {
-    const pattern = new RegExp(
-      `\\b${filler.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-      "gi",
-    );
-    const matches = remaining.match(pattern);
-    if (matches?.length) {
-      counts[filler] = matches.length;
-      remaining = remaining.replace(pattern, " ");
-    }
-  }
-
-  return counts;
 }
 
 function mostCommonFiller(sessions: HistorySession[]): string {
@@ -268,8 +246,8 @@ export default function SpeechEvalHistoryPage() {
           <>
             {!hasCloudSessions && sessions.length > 0 ? (
               <p className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-center text-sm text-gray-400">
-                Sessions are saved on this browser. Complete a speech and they
-                will appear here.
+                Showing browser-only backups. New sessions save to your account
+                when analysis completes successfully.
               </p>
             ) : null}
 

@@ -186,6 +186,8 @@ export default function SignUpPage() {
 
           <GoogleSignInButton
             disabled={isSubmitting}
+            nextPath={nextPath}
+            modeParam={modeParam}
             onError={(message) => setFormError(message)}
           />
         </form>
