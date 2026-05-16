@@ -125,7 +125,10 @@ function FeedbackCard({ config }: { config: CardConfig }) {
       if (playTokenRef.current !== token) return;
 
       if (!res.ok) {
-        throw new Error("Could not load audio feedback");
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(data.error ?? "Could not load audio feedback");
       }
 
       const blob = await res.blob();

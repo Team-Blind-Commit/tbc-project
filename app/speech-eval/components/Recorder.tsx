@@ -126,7 +126,10 @@ export function Recorder({ topic, onAnalysisComplete }: RecorderProps) {
       });
 
       if (!res.ok) {
-        const data = (await res.json()) as { error?: string };
+        const data = (await res.json()) as {
+          error?: string;
+          code?: string;
+        };
         throw new Error(data.error ?? "Analysis failed");
       }
 

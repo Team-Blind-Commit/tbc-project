@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getGroq } from "@/lib/groq";
 import { getOpenAI } from "@/lib/openai";
 import { createSupabaseServer } from "@/lib/supabase";
+import { assessTranscriptQuality } from "@/lib/transcript-quality";
 
 const COUNTER_SYSTEM = `You are Rex, an enthusiastic filler-word specialist. The user just practiced a speech on the given topic. Count every filler word in their transcript: um, uh, like, you know, basically, literally, actually, right, okay, so. List each filler with its exact count and give a total. Then give one encouraging tip to reduce fillers. Speak directly to them, warmly, like a real person. Keep it under 60 words so it sounds natural when spoken aloud.`;
 
@@ -68,6 +69,7 @@ async function transcribeWithElevenLabs(audio: Blob): Promise<string | null> {
       method: "POST",
       headers: { "xi-api-key": apiKey },
       body: sttForm,
+      signal: AbortSignal.timeout(45_000),
     },
   );
 
@@ -108,17 +110,20 @@ async function transcribeWithWhisper(audio: Blob): Promise<string> {
 }
 
 async function transcribeAudio(audio: Blob): Promise<string> {
+  // Whisper first — saves ElevenLabs credits for TTS playback
+  try {
+    const whisperText = await transcribeWithWhisper(audio);
+    if (whisperText) return whisperText;
+  } catch (whisperError) {
+    console.error("[analyze] Whisper STT error:", whisperError);
+  }
+
   const elevenLabsText = await transcribeWithElevenLabs(audio);
   if (elevenLabsText) return elevenLabsText;
 
-  try {
-    return await transcribeWithWhisper(audio);
-  } catch (whisperError) {
-    console.error("[analyze] Whisper STT error:", whisperError);
-    throw new Error(
-      "Could not transcribe your recording. Check your API keys and try again.",
-    );
-  }
+  throw new Error(
+    "Could not transcribe your recording. Check your API keys and try again.",
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -147,6 +152,18 @@ export async function POST(request: NextRequest) {
     if (!transcript) {
       return NextResponse.json(
         { error: "Could not transcribe audio. Please try speaking louder." },
+        { status: 422 },
+      );
+    }
+
+    const quality = assessTranscriptQuality(transcript, durationSeconds);
+    if (quality.isUnclear) {
+      return NextResponse.json(
+        {
+          error: quality.message,
+          code: "unclear_audio",
+          transcript,
+        },
         { status: 422 },
       );
     }
