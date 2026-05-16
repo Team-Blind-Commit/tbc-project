@@ -18,31 +18,82 @@ import {
 const OLIVIA_MODES: VoiceCoachMode[] = ["Presentation", "Impromptu Speaking"];
 const MODE_STYLE: Record<
   VoiceCoachMode,
-  { subtitle: string; accent: string; border: string; glow: string }
+  {
+    subtitle: string;
+    accent: string;
+    orb: string;
+    idleBg: string;
+    selectedBg: string;
+    radial: string;
+    border: string;
+    borderSelected: string;
+    glow: string;
+    glowSelected: string;
+  }
 > = {
   Interview: {
     subtitle: "Sharpen concise answers and follow-up handling.",
-    accent: "text-blue-300",
-    border: "border-blue-500/25",
-    glow: "shadow-[0_0_30px_rgba(59,130,246,0.12)]",
+    accent: "text-sky-300",
+    orb: "bg-sky-400/30",
+    idleBg:
+      "bg-[linear-gradient(145deg,rgba(12,18,32,0.92)_0%,rgba(23,37,84,0.55)_48%,rgba(8,12,22,0.95)_100%)]",
+    selectedBg:
+      "bg-[linear-gradient(145deg,rgba(30,58,138,0.55)_0%,rgba(59,130,246,0.22)_45%,rgba(15,23,42,0.9)_100%)]",
+    radial:
+      "bg-[radial-gradient(ellipse_at_top_right,rgba(56,189,248,0.22),transparent_58%)]",
+    border: "border-sky-500/20",
+    borderSelected: "border-sky-400/55",
+    glow: "shadow-[inset_0_1px_0_rgba(125,211,252,0.08)]",
+    glowSelected:
+      "shadow-[0_12px_40px_rgba(59,130,246,0.28),0_0_0_1px_rgba(125,211,252,0.25),inset_0_1px_0_rgba(186,230,253,0.15)]",
   },
   Debate: {
     subtitle: "Build stronger logic and rebuttal structure.",
-    accent: "text-red-300",
-    border: "border-red-500/25",
-    glow: "shadow-[0_0_30px_rgba(239,68,68,0.12)]",
+    accent: "text-rose-300",
+    orb: "bg-rose-400/30",
+    idleBg:
+      "bg-[linear-gradient(145deg,rgba(20,10,14,0.92)_0%,rgba(127,29,29,0.45)_48%,rgba(12,8,10,0.95)_100%)]",
+    selectedBg:
+      "bg-[linear-gradient(145deg,rgba(159,18,57,0.5)_0%,rgba(244,63,94,0.2)_45%,rgba(20,10,14,0.9)_100%)]",
+    radial:
+      "bg-[radial-gradient(ellipse_at_top_right,rgba(251,113,133,0.2),transparent_58%)]",
+    border: "border-rose-500/20",
+    borderSelected: "border-rose-400/55",
+    glow: "shadow-[inset_0_1px_0_rgba(253,164,175,0.08)]",
+    glowSelected:
+      "shadow-[0_12px_40px_rgba(244,63,94,0.26),0_0_0_1px_rgba(251,113,133,0.25),inset_0_1px_0_rgba(254,205,211,0.12)]",
   },
   Presentation: {
     subtitle: "Improve clarity, transitions, and confidence.",
-    accent: "text-green-300",
-    border: "border-green-500/25",
-    glow: "shadow-[0_0_30px_rgba(34,197,94,0.12)]",
+    accent: "text-emerald-300",
+    orb: "bg-emerald-400/30",
+    idleBg:
+      "bg-[linear-gradient(145deg,rgba(8,16,14,0.92)_0%,rgba(6,78,59,0.5)_48%,rgba(6,12,10,0.95)_100%)]",
+    selectedBg:
+      "bg-[linear-gradient(145deg,rgba(6,95,70,0.52)_0%,rgba(16,185,129,0.2)_45%,rgba(8,16,14,0.9)_100%)]",
+    radial:
+      "bg-[radial-gradient(ellipse_at_top_right,rgba(52,211,153,0.2),transparent_58%)]",
+    border: "border-emerald-500/20",
+    borderSelected: "border-emerald-400/55",
+    glow: "shadow-[inset_0_1px_0_rgba(110,231,183,0.08)]",
+    glowSelected:
+      "shadow-[0_12px_40px_rgba(16,185,129,0.26),0_0_0_1px_rgba(52,211,153,0.25),inset_0_1px_0_rgba(167,243,208,0.12)]",
   },
   "Impromptu Speaking": {
     subtitle: "Practice quick thinking with calm delivery.",
     accent: "text-violet-300",
-    border: "border-violet-500/25",
-    glow: "shadow-[0_0_30px_rgba(139,92,246,0.15)]",
+    orb: "bg-violet-400/30",
+    idleBg:
+      "bg-[linear-gradient(145deg,rgba(14,10,24,0.92)_0%,rgba(76,29,149,0.48)_48%,rgba(10,8,18,0.95)_100%)]",
+    selectedBg:
+      "bg-[linear-gradient(145deg,rgba(91,33,182,0.52)_0%,rgba(139,92,246,0.22)_45%,rgba(14,10,24,0.9)_100%)]",
+    radial:
+      "bg-[radial-gradient(ellipse_at_top_right,rgba(167,139,250,0.22),transparent_58%)]",
+    border: "border-violet-500/20",
+    borderSelected: "border-violet-400/55",
+    glow: "shadow-[inset_0_1px_0_rgba(196,181,253,0.08)]",
+    glowSelected:
+      "shadow-[0_12px_40px_rgba(139,92,246,0.3),0_0_0_1px_rgba(167,139,250,0.28),inset_0_1px_0_rgba(221,214,254,0.14)]",
   },
 };
 
@@ -158,24 +209,75 @@ export function VoiceCoachPage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
             Practice mode
           </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {VOICE_COACH_MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setPickedMode(mode)}
-                className={`rounded-2xl border p-4 text-left transition-all duration-200 ${
-                  selectedMode === mode
-                    ? `${MODE_STYLE[mode].border} bg-white/[0.06] text-white ${MODE_STYLE[mode].glow}`
-                    : "border-white/[0.08] bg-[#111114]/80 text-[#d4d4d8] hover:border-white/20 hover:bg-white/[0.04]"
-                }`}
-              >
-                <p className="text-sm font-semibold">{mode}</p>
-                <p className={`mt-1 text-xs ${MODE_STYLE[mode].accent}`}>
-                  {MODE_STYLE[mode].subtitle}
-                </p>
-              </button>
-            ))}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            {VOICE_COACH_MODES.map((mode) => {
+              const style = MODE_STYLE[mode];
+              const isSelected = selectedMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPickedMode(mode)}
+                  className={`group relative overflow-hidden rounded-2xl border p-5 text-left transition-[border-color,box-shadow,transform] duration-300 ease-out active:scale-[0.98] ${
+                    isSelected
+                      ? `z-10 ${style.borderSelected} ${style.glowSelected} animate-[mode-card-pop_0.45s_cubic-bezier(0.34,1.56,0.64,1)_forwards]`
+                      : `${style.border} ${style.glow} hover:-translate-y-1 hover:scale-[1.02] hover:border-white/25 hover:shadow-[0_8px_28px_rgba(0,0,0,0.35)]`
+                  }`}
+                >
+                  <div
+                    aria-hidden
+                    className={`absolute inset-0 transition-opacity duration-300 ${
+                      isSelected ? style.selectedBg : style.idleBg
+                    }`}
+                  />
+                  <div
+                    aria-hidden
+                    className={`pointer-events-none absolute inset-0 transition-opacity duration-300 ${style.radial} ${
+                      isSelected ? "opacity-100" : "opacity-60 group-hover:opacity-90"
+                    }`}
+                  />
+                  <div
+                    aria-hidden
+                    className={`pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full blur-2xl transition-all duration-500 ${style.orb} ${
+                      isSelected
+                        ? "scale-125 opacity-70"
+                        : "opacity-40 group-hover:scale-110 group-hover:opacity-55"
+                    }`}
+                  />
+                  <div
+                    aria-hidden
+                    className={`pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent transition-opacity duration-300 ${
+                      isSelected ? "opacity-100" : "opacity-50"
+                    }`}
+                  />
+                  <div className="relative">
+                    <p
+                      className={`text-base font-semibold tracking-tight transition-colors duration-300 ${
+                        isSelected ? "text-white" : "text-zinc-100 group-hover:text-white"
+                      }`}
+                    >
+                      {mode}
+                    </p>
+                    <p
+                      className={`mt-1.5 text-xs leading-relaxed transition-colors duration-300 ${style.accent} ${
+                        isSelected ? "opacity-100" : "opacity-85 group-hover:opacity-100"
+                      }`}
+                    >
+                      {style.subtitle}
+                    </p>
+                    {isSelected && (
+                      <span
+                        aria-hidden
+                        className={`mt-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${style.accent} border-current/25 bg-white/5`}
+                      >
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
