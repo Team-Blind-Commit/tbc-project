@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { buildPostLoginPath } from '@/lib/auth-redirect'
 import { ensureProfile } from '@/lib/profiles'
 import { createClient } from '@/lib/supabase/server'
 
@@ -6,6 +7,7 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
+  const mode = searchParams.get('mode')
   const oauthError = searchParams.get('error')
   const oauthErrorDescription = searchParams.get('error_description')
 
@@ -43,7 +45,8 @@ export async function GET(request: Request) {
         console.warn('[auth/callback] session ok but no user from getUser()')
       }
 
-      return NextResponse.redirect(`${origin}${next}`)
+      const destination = buildPostLoginPath(next, mode)
+      return NextResponse.redirect(`${origin}${destination}`)
     }
     console.error('[auth/callback] exchangeCodeForSession:', error.message)
   }

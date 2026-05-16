@@ -139,6 +139,8 @@ export default function LoginPage() {
 
           <GoogleSignInButton
             disabled={formDisabled}
+            nextPath={nextPath}
+            modeParam={modeParam}
             onError={(message) => setFormError(message)}
           />
         </form>

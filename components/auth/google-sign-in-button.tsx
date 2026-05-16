@@ -30,11 +30,27 @@ function GoogleIcon() {
 type GoogleSignInButtonProps = {
   disabled?: boolean
   onError?: (message: string) => void
+  nextPath?: string
+  modeParam?: string | null
+}
+
+function buildOAuthRedirectUrl(nextPath: string, modeParam?: string | null): string {
+  const params = new URLSearchParams()
+  if (nextPath && nextPath.startsWith('/')) {
+    params.set('next', nextPath)
+  }
+  if (modeParam) {
+    params.set('mode', modeParam)
+  }
+  const query = params.toString()
+  return `${window.location.origin}${OAUTH_CALLBACK_PATH}${query ? `?${query}` : ''}`
 }
 
 export function GoogleSignInButton({
   disabled = false,
   onError,
+  nextPath = '/dashboard',
+  modeParam = null,
 }: GoogleSignInButtonProps) {
   const [isLoading, setIsLoading] = useState(false)
 
@@ -44,7 +60,7 @@ export function GoogleSignInButton({
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}${OAUTH_CALLBACK_PATH}`,
+        redirectTo: buildOAuthRedirectUrl(nextPath, modeParam),
       },
     })
 

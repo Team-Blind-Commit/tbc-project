@@ -11,6 +11,7 @@ export interface SaveVoiceSessionInput {
   summary: VoiceSessionSummary;
 }
 
+/** Persists voice coach session + conversational memory (user_coach_memory) + tips (action_points). */
 export async function saveVoiceSession(
   input: SaveVoiceSessionInput,
 ): Promise<{ sessionId: string | null; error?: string; skipped?: boolean }> {
