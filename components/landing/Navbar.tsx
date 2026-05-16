@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { buildLoginHref } from "@/lib/auth-redirect";
 import { Logo } from "./Logo";
 
 const NAV_LINKS = [
@@ -39,7 +40,7 @@ export function Navbar() {
         </nav>
 
         <Link
-          href="/login"
+          href={buildLoginHref("/voice-coach", "Interview")}
           className="shrink-0 rounded-lg bg-[#8b5cf6] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7c3aed]"
         >
           Start Practicing Free
