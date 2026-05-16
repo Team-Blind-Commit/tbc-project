@@ -66,6 +66,30 @@ function getErrorContextText(context: unknown): string {
   }
 }
 
+const RETRY_CLOSE_DELAY_MS = 400;
+
+type ConversationHandle = ReturnType<typeof useConversation>;
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isSdkConnected(conv: ConversationHandle | null | undefined): boolean {
+  return conv?.status === "connected";
+}
+
+function isWebSocketClosedError(message: string, context?: unknown): boolean {
+  const combined = `${message} ${getErrorContextText(context)}`.toLowerCase();
+  return (
+    combined.includes("closing or closed") ||
+    combined.includes("websocket is already") ||
+    combined.includes("closed before session start") ||
+    combined.includes("already in closing")
+  );
+}
+
 function isRetryableStartupFailure(message: string, context?: unknown): boolean {
   const combined = `${message} ${getErrorContextText(context)}`.toLowerCase();
   return (
@@ -383,23 +407,14 @@ function CoachFace({
 }
 
 export function VoiceCoachSession({ mode }: VoiceCoachSessionProps) {
-  const [sessionInstanceKey, setSessionInstanceKey] = useState(0);
-
   return (
-    <ConversationProvider key={sessionInstanceKey}>
-      <VoiceCoachSessionInner
-        mode={mode}
-        onRemountSdk={() => setSessionInstanceKey((key) => key + 1)}
-      />
+    <ConversationProvider>
+      <VoiceCoachSessionInner mode={mode} />
     </ConversationProvider>
   );
 }
 
-interface VoiceCoachSessionInnerProps extends VoiceCoachSessionProps {
-  onRemountSdk: () => void;
-}
-
-function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerProps) {
+function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -424,15 +439,44 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
   const pendingConnectRef = useRef<PendingConnect | null>(null);
   const negotiationRetriesRef = useRef(0);
   const loadingPublicRetryRef = useRef(false);
-  const loadingSawNonDisconnectedStatusRef = useRef(false);
   const loadingFailureHandledRef = useRef(false);
   const isStartingRef = useRef(false);
   const startAttemptCounterRef = useRef(0);
   const activeStartAttemptRef = useRef(0);
   const sessionStartedRef = useRef(false);
   const autoEndingRef = useRef(false);
+  const conversationIdRef = useRef<string | null>(null);
+  const conversationRef = useRef<ConversationHandle | null>(null);
+  const isMountedRef = useRef(false);
+  const connectionLockRef = useRef(false);
+  const onConnectRef = useRef<() => void>(() => undefined);
+  const onDisconnectRef = useRef<() => void>(() => undefined);
+  const onMessageRef = useRef<(message: unknown) => void>(() => undefined);
+  const onErrorRef = useRef<(message: string, context: unknown) => void>(() => undefined);
+  const [storedConversationId, setStoredConversationId] = useState<string | null>(
+    null,
+  );
 
   const historyLoadGenerationRef = useRef(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      historyLoadGenerationRef.current += 1;
+      activeStartAttemptRef.current = ++startAttemptCounterRef.current;
+      connectionLockRef.current = false;
+      void (async () => {
+        const conv = conversationRef.current;
+        if (!conv || conv.status === "disconnected") return;
+        try {
+          await conv.endSession();
+        } catch {
+          // Socket may already be closed — stopping mic is best-effort on unmount.
+        }
+      })();
+    };
+  }, []);
 
   const loadHistory = useCallback(async () => {
     const userName = getOrCreateStoredUserName();
@@ -461,7 +505,7 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
         throw new Error(data.error ?? "Failed to load chat history");
       }
 
-      if (isStale()) return;
+      if (isStale() || !isMountedRef.current) return;
 
       setHistoryItems(data.items ?? []);
       if (data.warning) {
@@ -470,7 +514,7 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
         setHistoryError("History is temporarily unavailable.");
       }
     } catch (err) {
-      if (isStale()) return;
+      if (isStale() || !isMountedRef.current) return;
 
       const message =
         err instanceof Error ? err.message : "Failed to load chat history";
@@ -487,7 +531,7 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
           : message,
       );
     } finally {
-      if (!isStale()) {
+      if (!isStale() && isMountedRef.current) {
         setHistoryLoading(false);
       }
     }
@@ -495,11 +539,12 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadHistory();
+      if (isMountedRef.current) {
+        void loadHistory();
+      }
     }, 0);
     return () => {
       window.clearTimeout(timer);
-      historyLoadGenerationRef.current += 1;
     };
   }, [loadHistory]);
 
@@ -598,106 +643,238 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
         retryErr,
       ),
     );
+    if (!isMountedRef.current) return;
     phaseRef.current = "idle";
     setPhase("idle");
+    conversationIdRef.current = null;
+    setStoredConversationId(null);
   }, []);
 
-  const conversation = useConversation({
-    onConnect: () => {
-      negotiationRetriesRef.current = 0;
-      pendingConnectRef.current = null;
-      sessionStartedRef.current = true;
-      loadingFailureHandledRef.current = false;
-      loadingSawNonDisconnectedStatusRef.current = false;
-      activeConnectedAtRef.current = Date.now();
-      setConnectHint(null);
-      phaseRef.current = "active";
-      setPhase("active");
-      setError(null);
-    },
-    onDisconnect: () => {
+  const endSdkSessionIfOpen = useCallback(async () => {
+    const conv = conversationRef.current;
+    if (!conv || conv.status === "disconnected") {
       sessionStartedRef.current = false;
-      if (phaseRef.current === "loading") {
-        // During loading, disconnect events can be transient while handshake settles.
-        // Let startup pipeline / timeout set the final state deterministically.
+      connectionLockRef.current = false;
+      return;
+    }
+    try {
+      await conv.endSession();
+    } catch (err) {
+      console.warn("[voice-coach] endSession skipped:", err);
+    } finally {
+      sessionStartedRef.current = false;
+      connectionLockRef.current = false;
+    }
+    await delayMs(RETRY_CLOSE_DELAY_MS);
+  }, []);
+
+  const startSdkSession = useCallback(
+    async (options: Parameters<ConversationHandle["startSession"]>[0]) => {
+      const conv = conversationRef.current;
+      if (!conv) {
+        throw new Error("Voice SDK not ready");
+      }
+      if (isSdkConnected(conv)) {
         return;
       }
-      setPhase((current) => {
-        if (current === "active") {
-          phaseRef.current = "idle";
-          return "idle";
-        }
-        return current;
-      });
-    },
-    onMessage: (message) => {
-      const normalized = normalizeConversationMessage(message);
-      if (normalized) {
-        setMessages((current) => [...current, normalized]);
-        transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+      if (connectionLockRef.current) {
         return;
       }
-
-      const rawMessage: unknown = message;
-      const fallback = (
-        typeof rawMessage === "string"
-          ? rawMessage
-          : JSON.stringify(rawMessage ?? "")
-      ).trim();
-      if (fallback) {
-        transcriptRef.current.push(fallback);
+      connectionLockRef.current = true;
+      try {
+        await conv.startSession(options);
+      } catch (err) {
+        connectionLockRef.current = false;
+        throw err;
       }
     },
-    onError: (message, context) => {
-      console.error("[voice-coach] conversation error:", message, context);
+    [],
+  );
 
-      const pending = pendingConnectRef.current;
-      if (
-        phaseRef.current === "loading" &&
-        pending?.authMode === "signed" &&
-        pending.agentId &&
-        !loadingPublicRetryRef.current &&
-        isRetryableStartupFailure(message, context)
-      ) {
-        loadingPublicRetryRef.current = true;
-        pendingConnectRef.current = {
-          authMode: "public",
-          agentId: pending.agentId,
-          sessionOptions: pending.sessionOptions,
-        };
-        setConnectHint(
-          "Signed handshake failed. Retrying with public agent connection…",
+  onConnectRef.current = () => {
+    if (!isMountedRef.current) return;
+    connectionLockRef.current = false;
+    negotiationRetriesRef.current = 0;
+    pendingConnectRef.current = null;
+    sessionStartedRef.current = true;
+    loadingFailureHandledRef.current = false;
+    activeConnectedAtRef.current = Date.now();
+    setConnectHint(null);
+    phaseRef.current = "active";
+    setPhase("active");
+    setError(null);
+
+    try {
+      const id = conversationRef.current?.getId() || null;
+      conversationIdRef.current = id;
+      setStoredConversationId(id);
+    } catch (err) {
+      console.warn("[voice-coach] getId on connect skipped:", err);
+    }
+  };
+
+  onDisconnectRef.current = () => {
+    sessionStartedRef.current = false;
+    connectionLockRef.current = false;
+
+    if (!isMountedRef.current) {
+      void endSdkSessionIfOpen();
+      return;
+    }
+
+    if (phaseRef.current === "loading") {
+      void endSdkSessionIfOpen();
+      return;
+    }
+
+    if (
+      phaseRef.current === "ending" ||
+      phaseRef.current === "done" ||
+      autoEndingRef.current
+    ) {
+      return;
+    }
+
+    void (async () => {
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current) return;
+      if (phaseRef.current === "active") {
+        setNotice(
+          "Connection lost. Start again to continue, or End session to save.",
         );
+        phaseRef.current = "idle";
+        setPhase("idle");
+      }
+    })();
+  };
+
+  onMessageRef.current = (message: unknown) => {
+    if (!isMountedRef.current) return;
+    if (!isSdkConnected(conversationRef.current)) return;
+
+    const normalized = normalizeConversationMessage(message);
+    if (normalized) {
+      setMessages((current) => [...current, normalized]);
+      transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+      return;
+    }
+
+    const fallback = (
+      typeof message === "string" ? message : JSON.stringify(message ?? "")
+    ).trim();
+    if (fallback) {
+      transcriptRef.current.push(fallback);
+    }
+  };
+
+  onErrorRef.current = (message: string, context: unknown) => {
+    if (!isMountedRef.current) return;
+
+    if (isWebSocketClosedError(message, context)) {
+      void (async () => {
+        await endSdkSessionIfOpen();
+        if (!isMountedRef.current) return;
+        if (phaseRef.current === "active") {
+          setNotice(
+            "Voice connection closed. Check that your ElevenLabs agent is Public, then start again.",
+          );
+          phaseRef.current = "idle";
+          setPhase("idle");
+        }
+      })();
+      return;
+    }
+
+    console.error("[voice-coach] conversation error:", message, context);
+
+    const pending = pendingConnectRef.current;
+    if (
+      phaseRef.current === "loading" &&
+      pending?.authMode === "signed" &&
+      pending.agentId &&
+      !loadingPublicRetryRef.current &&
+      isRetryableStartupFailure(message, context)
+    ) {
+      loadingPublicRetryRef.current = true;
+      pendingConnectRef.current = {
+        authMode: "public",
+        agentId: pending.agentId,
+        sessionOptions: pending.sessionOptions,
+      };
+      setConnectHint(
+        "Signed handshake failed. Retrying with public agent connection…",
+      );
+      const publicPending = {
+        authMode: "public" as const,
+        agentId: pending.agentId,
+        sessionOptions: pending.sessionOptions,
+      };
+      void (async () => {
+        await endSdkSessionIfOpen();
+        if (
+          !isMountedRef.current ||
+          phaseRef.current !== "loading" ||
+          !pendingConnectRef.current
+        ) {
+          return;
+        }
         try {
-          void conversation.startSession({
-            agentId: pending.agentId,
+          await startSdkSession({
+            agentId: publicPending.agentId,
             connectionType: "websocket",
-            ...pending.sessionOptions,
+            ...publicPending.sessionOptions,
           });
         } catch (retryErr) {
-          handleFallbackStartFailure(retryErr);
+          if (isMountedRef.current) {
+            handleFallbackStartFailure(retryErr);
+          }
         }
-        return;
-      }
+      })();
+      return;
+    }
 
-      loadingFailureHandledRef.current = true;
-      pendingConnectRef.current = null;
-      negotiationRetriesRef.current = 0;
-      sessionStartedRef.current = false;
-      loadingPublicRetryRef.current = false;
-      setConnectHint(null);
-      setError(formatVoiceCoachConnectionError(message, context));
-      phaseRef.current = "idle";
-      setPhase("idle");
-    },
+    if (phaseRef.current === "active" || phaseRef.current === "ending") {
+      void endSdkSessionIfOpen();
+      setNotice(
+        `Connection issue: ${formatVoiceCoachConnectionError(message, context).split("\n")[0]}`,
+      );
+      if (phaseRef.current === "active") {
+        phaseRef.current = "idle";
+        setPhase("idle");
+      }
+      return;
+    }
+
+    loadingFailureHandledRef.current = true;
+    pendingConnectRef.current = null;
+    negotiationRetriesRef.current = 0;
+    sessionStartedRef.current = false;
+    loadingPublicRetryRef.current = false;
+    connectionLockRef.current = false;
+    setConnectHint(null);
+    setError(formatVoiceCoachConnectionError(message, context));
+    phaseRef.current = "idle";
+    setPhase("idle");
+    void endSdkSessionIfOpen();
+  };
+
+  const conversation = useConversation({
+    onConnect: () => onConnectRef.current(),
+    onDisconnect: () => onDisconnectRef.current(),
+    onMessage: (message) => onMessageRef.current(message),
+    onError: (message, context) => onErrorRef.current(message, context),
   });
+
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
 
   useEffect(() => {
     if (phase !== "loading") return;
 
     const timeoutMs = 25_000;
     const timer = window.setTimeout(() => {
-      if (phaseRef.current !== "loading") return;
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
 
       pendingConnectRef.current = null;
       negotiationRetriesRef.current = 0;
@@ -705,6 +882,9 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       loadingPublicRetryRef.current = false;
       loadingFailureHandledRef.current = true;
       isStartingRef.current = false;
+      connectionLockRef.current = false;
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
       setConnectHint(null);
       setNotice(null);
       setError(
@@ -712,17 +892,31 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
           "NegotiationError: negotiation timed out /rtc/v1/validate v1 RTC path not found",
         ),
       );
-      try {
-        conversation.endSession();
-      } catch (err) {
-        console.warn("[voice-coach] endSession skipped:", err);
-      }
-      phaseRef.current = "idle";
-      setPhase("idle");
+      void endSdkSessionIfOpen().then(() => {
+        if (!isMountedRef.current || phaseRef.current !== "loading") return;
+        phaseRef.current = "idle";
+        setPhase("idle");
+      });
     }, timeoutMs);
 
     return () => window.clearTimeout(timer);
-  }, [conversation, phase]);
+  }, [endSdkSessionIfOpen, phase]);
+
+  const prevModeRef = useRef(mode);
+  useEffect(() => {
+    if (prevModeRef.current === mode) return;
+    prevModeRef.current = mode;
+    activeStartAttemptRef.current = ++startAttemptCounterRef.current;
+    if (phaseRef.current !== "active" && phaseRef.current !== "loading") {
+      return;
+    }
+    void endSdkSessionIfOpen().then(() => {
+      if (!isMountedRef.current) return;
+      setNotice("Practice mode changed. Start again to connect.");
+      phaseRef.current = "idle";
+      setPhase("idle");
+    });
+  }, [endSdkSessionIfOpen, mode]);
 
   const avatarIsActive = phase === "active" || phase === "ending";
   const avatarIsSpeaking = avatarIsActive && conversation.isSpeaking;
@@ -776,104 +970,22 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
     };
   }, [avatarIsActive, avatarIsSpeaking]);
 
-  const safeEndConversation = useCallback(() => {
-    try {
-      conversation.endSession();
-    } catch (err) {
-      console.warn("[voice-coach] endSession skipped:", err);
-    } finally {
-      sessionStartedRef.current = false;
-      pendingConnectRef.current = null;
-      isStartingRef.current = false;
-      loadingPublicRetryRef.current = false;
-      loadingFailureHandledRef.current = false;
-      loadingSawNonDisconnectedStatusRef.current = false;
-    }
-  }, [conversation]);
-
-  const cancelConnecting = useCallback(() => {
-    if (phaseRef.current !== "loading") return;
-
-    activeStartAttemptRef.current = ++startAttemptCounterRef.current;
-    safeEndConversation();
-    negotiationRetriesRef.current = 0;
-    setConnectHint(null);
-    setNotice(null);
-    phaseRef.current = "idle";
-    setPhase("idle");
-  }, [safeEndConversation]);
-
-  useEffect(() => {
-    if (phase !== "loading" || loadingFailureHandledRef.current) {
-      return;
-    }
-
-    if (conversation.status !== "disconnected") {
-      loadingSawNonDisconnectedStatusRef.current = true;
-      return;
-    }
-
-    const hasStartedNegotiation = loadingSawNonDisconnectedStatusRef.current;
-    const exceededGracePeriod = Date.now() - startedAtRef.current > 4_000;
-    if (!hasStartedNegotiation || !exceededGracePeriod) {
-      return;
-    }
-
-    loadingFailureHandledRef.current = true;
-
-    const pending = pendingConnectRef.current;
-    if (
-      pending?.authMode === "signed" &&
-      pending.agentId &&
-      !loadingPublicRetryRef.current
-    ) {
-      loadingPublicRetryRef.current = true;
-      pendingConnectRef.current = {
-        authMode: "public",
-        agentId: pending.agentId,
-        sessionOptions: pending.sessionOptions,
-      };
-      setConnectHint(
-        "Signed handshake stalled. Retrying with public agent connection…",
-      );
-      void conversation.startSession({
-        agentId: pending.agentId,
-        connectionType: "websocket",
-        ...pending.sessionOptions,
-      });
-      return;
-    }
-
-    pendingConnectRef.current = null;
-    negotiationRetriesRef.current = 0;
-    sessionStartedRef.current = false;
-    loadingPublicRetryRef.current = false;
-    isStartingRef.current = false;
-    setConnectHint(null);
-    setNotice(null);
-    setError(
-      formatVoiceCoachConnectionError(
-        "NegotiationError: negotiation timed out /rtc/v1/validate v1 RTC path not found",
-      ),
-    );
-    safeEndConversation();
-    phaseRef.current = "idle";
-    setPhase("idle");
-  }, [conversation, conversation.status, phase, safeEndConversation]);
-
-  useEffect(() => {
-    return () => {
-      pendingConnectRef.current = null;
-      negotiationRetriesRef.current = 0;
-      autoEndingRef.current = false;
-      safeEndConversation();
-    };
-  }, [safeEndConversation]);
-
   const getConversationId = useCallback((): string | undefined => {
-    if (!sessionStartedRef.current) return undefined;
+    if (conversationIdRef.current) {
+      return conversationIdRef.current;
+    }
+    if (conversation.status !== "connected") {
+      return undefined;
+    }
     try {
-      return conversation.getId() || undefined;
+      const id = conversation.getId() || undefined;
+      if (id) {
+        conversationIdRef.current = id;
+        if (isMountedRef.current) {
+          setStoredConversationId(id);
+        }
+      }
+      return id;
     } catch (err) {
       console.warn("[voice-coach] getId skipped:", err);
       return undefined;
@@ -881,9 +993,7 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
   }, [conversation]);
 
   const startSession = useCallback(async () => {
-    if (phaseRef.current === "loading") {
-      cancelConnecting();
-    } else if (isStartingRef.current) {
+    if (isStartingRef.current || phaseRef.current === "loading") {
       setNotice("A connection attempt is already in progress...");
       return;
     }
@@ -893,16 +1003,16 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
     activeStartAttemptRef.current = startAttemptId;
 
     getOrCreateStoredUserName();
-    safeEndConversation();
     setError(null);
     setNotice(null);
     setConnectHint(null);
     negotiationRetriesRef.current = 0;
     loadingPublicRetryRef.current = false;
-    loadingSawNonDisconnectedStatusRef.current = false;
     loadingFailureHandledRef.current = false;
     pendingConnectRef.current = null;
     sessionStartedRef.current = false;
+    conversationIdRef.current = null;
+    setStoredConversationId(null);
     activeConnectedAtRef.current = 0;
     autoEndingRef.current = false;
     phaseRef.current = "loading";
@@ -915,15 +1025,17 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
     transcriptRef.current = [];
 
     try {
-      const permissionStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
-      permissionStream.getTracks().forEach((track) => track.stop());
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
+      if (isSdkConnected(conversationRef.current)) {
+        phaseRef.current = "active";
+        setPhase("active");
+        return;
+      }
+
+      await navigator.mediaDevices.getUserMedia({ audio: true });
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -942,7 +1054,9 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to start session");
       }
-      if (activeStartAttemptRef.current !== startAttemptId) return;
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
 
       if (!data.memory) {
         throw new Error("Invalid session response from server");
@@ -964,7 +1078,6 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       startedAtRef.current = Date.now();
 
       const sessionOptions = {
-        serverLocation: "in-residency" as const,
         dynamicVariables: {
           mode,
           memory: data.memory,
@@ -994,26 +1107,28 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
 
       pendingConnectRef.current = pending;
       if (pending.authMode === "signed" && pending.signedUrl) {
-        await conversation.startSession({
+        await startSdkSession({
           signedUrl: pending.signedUrl,
-          connectionType: "websocket",
           ...pending.sessionOptions,
         });
       } else if (pending.authMode === "public" && pending.agentId) {
-        loadingPublicRetryRef.current = true;
-        await conversation.startSession({
+        await startSdkSession({
           agentId: pending.agentId,
-          connectionType: "websocket",
           ...pending.sessionOptions,
         });
       }
     } catch (err) {
-      if (activeStartAttemptRef.current !== startAttemptId) return;
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
       console.error("[voice-coach] start failed:", err);
+      connectionLockRef.current = false;
+      await endSdkSessionIfOpen();
       pendingConnectRef.current = null;
       sessionStartedRef.current = false;
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
       loadingPublicRetryRef.current = false;
-      safeEndConversation();
       setConnectHint(null);
       setError(
         formatVoiceCoachConnectionError(
@@ -1024,18 +1139,27 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       phaseRef.current = "idle";
       setPhase("idle");
     } finally {
-      if (activeStartAttemptRef.current === startAttemptId) {
+      if (
+        isMountedRef.current &&
+        activeStartAttemptRef.current === startAttemptId
+      ) {
         isStartingRef.current = false;
       }
     }
-  }, [cancelConnecting, conversation, mode, safeEndConversation]);
+  }, [endSdkSessionIfOpen, mode, startSdkSession]);
 
   const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
     const userName = getStoredUserName() ?? getOrCreateStoredUserName();
     if (!userName) return;
 
-    if (phaseRef.current !== "active" && !sessionStartedRef.current) {
-      console.warn("[voice-coach] endSession called with no active conversation");
+    const conversationId =
+      conversationIdRef.current ?? storedConversationId ?? getConversationId();
+
+    if (
+      phaseRef.current !== "active" &&
+      phaseRef.current !== "ending" &&
+      !conversationId
+    ) {
       return;
     }
 
@@ -1045,19 +1169,32 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
     setConnectHint(null);
     setAutoEndedByVoice(triggeredByVoiceIntent);
     autoEndingRef.current = true;
+    phaseRef.current = "ending";
     setPhase("ending");
-    const conversationId = getConversationId();
+
     if (!conversationId) {
-      console.warn("[voice-coach] endSession skipped: missing conversation id");
-      safeEndConversation();
+      sessionStartedRef.current = false;
       setError("No active conversation found. Start a new session and try again.");
       phaseRef.current = "idle";
       setPhase("idle");
       isStartingRef.current = false;
+      autoEndingRef.current = false;
       return;
     }
 
-    safeEndConversation();
+    if (conversation.status !== "disconnected") {
+      try {
+        await conversation.endSession();
+      } catch (err) {
+        console.warn("[voice-coach] endSession skipped:", err);
+      }
+    }
+    sessionStartedRef.current = false;
+
+    if (!isMountedRef.current) {
+      autoEndingRef.current = false;
+      return;
+    }
 
     const durationSeconds = Math.round(
       (Date.now() - startedAtRef.current) / 1000,
@@ -1093,6 +1230,8 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
         throw new Error(data.error ?? "Failed to save session");
       }
 
+      if (!isMountedRef.current) return;
+
       setTask(data.task ?? null);
       setSummary(data.summary ?? null);
       if (data.warning) {
@@ -1102,9 +1241,12 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       } else {
         setNotice(null);
       }
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
       setPhase("done");
       void loadHistory();
     } catch (err) {
+      if (!isMountedRef.current) return;
       console.error("[voice-coach] end session failed:", err);
       setError(
         formatVoiceCoachConnectionError(
@@ -1115,10 +1257,12 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       phaseRef.current = "idle";
       setPhase("idle");
     } finally {
-      autoEndingRef.current = false;
-      isStartingRef.current = false;
+      if (isMountedRef.current) {
+        autoEndingRef.current = false;
+        isStartingRef.current = false;
+      }
     }
-  }, [getConversationId, loadHistory, mode, safeEndConversation]);
+  }, [conversation, getConversationId, loadHistory, mode, storedConversationId]);
 
   const coachAvatar = MODE_COACH_AVATAR[mode];
 
@@ -1150,22 +1294,16 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
             {task && <HomeworkCard task={task} mode={mode} />}
             <SessionActions
               onPracticeAgain={() => {
-                safeEndConversation();
-                negotiationRetriesRef.current = 0;
-                pendingConnectRef.current = null;
-                isStartingRef.current = false;
-                loadingFailureHandledRef.current = false;
-                loadingSawNonDisconnectedStatusRef.current = false;
-                loadingPublicRetryRef.current = false;
-                setError(null);
-                setNotice(null);
-                setConnectHint(null);
                 phaseRef.current = "idle";
                 setPhase("idle");
                 setTask(null);
                 setSummary(null);
                 setAutoEndedByVoice(false);
-                onRemountSdk();
+                setError(null);
+                setNotice(null);
+                setConnectHint(null);
+                conversationIdRef.current = null;
+                setStoredConversationId(null);
               }}
             />
           </div>
@@ -1180,16 +1318,27 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
     );
   }
 
+  const sdkConnected = conversation.status === "connected";
+  const isLive = phase === "active" && sdkConnected;
   const isActive = phase === "active" || phase === "ending";
   const isLoading = phase === "loading" || phase === "ending";
-  const heading = getSessionHeading(isActive, isLoading);
+  const canEndSession =
+    isLive ||
+    phase === "ending" ||
+    (Boolean(storedConversationId) &&
+      (phase === "active" || phase === "idle"));
+  const showStartButton =
+    phase === "idle" ||
+    phase === "loading" ||
+    (phase === "active" && !sdkConnected);
+  const heading = getSessionHeading(isLive, isLoading);
   const description = getSessionDescription(
-    isActive,
+    isLive,
     isLoading,
     conversation.isSpeaking,
     connectHint,
   );
-  const isConnected = conversation.status === "connected" || isActive;
+  const isConnected = sdkConnected;
   const liveStateLabel = isConnected
     ? conversation.isSpeaking
       ? "Connected · Coach speaking"
@@ -1356,24 +1505,18 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
       </p>
 
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              {!isActive ? (
+              {showStartButton ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (phase === "loading") {
-                      cancelConnecting();
-                    } else {
-                      void startSession();
-                    }
-                  }}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-6 py-3 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#7c3aed]"
+                  onClick={() => void startSession()}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-6 py-3 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#7c3aed] disabled:opacity-50"
                 >
                   <Mic className="h-4 w-4" />
-                  {phase === "loading"
-                    ? "Cancel"
-                    : "Start Practicing Free"}
+                  {isLoading ? "Connecting…" : "Start Practicing Free"}
                 </button>
-              ) : (
+              ) : null}
+              {canEndSession ? (
                 <button
                   type="button"
                   onClick={() => void endSession(false)}
@@ -1383,7 +1526,7 @@ function VoiceCoachSessionInner({ mode, onRemountSdk }: VoiceCoachSessionInnerPr
                   <Square className="h-4 w-4" />
                   {phase === "ending" ? "Saving session…" : "End session"}
                 </button>
-              )}
+              ) : null}
               <button
                 type="button"
                 onClick={() => setShowMessages(true)}

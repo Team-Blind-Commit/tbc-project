@@ -62,10 +62,16 @@ export function VoiceCoachPage() {
   const showGuestBanner = isAnonymousVoiceCoachUser(userName);
 
   useEffect(() => {
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      setUserName(getOrCreateStoredUserName());
+      if (!cancelled) {
+        setUserName(getOrCreateStoredUserName());
+      }
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   const showOliviaPicker = coachParam === "olivia" && !selectedMode;
