@@ -86,7 +86,11 @@ export function VoiceCoachPage() {
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(139,92,246,0.14),transparent_45%),radial-gradient(circle_at_75%_25%,rgba(59,130,246,0.09),transparent_40%)]"
       />
 
-      <div className="relative mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
+      <div
+        className={`relative mx-auto px-4 py-10 sm:px-6 lg:px-8 ${
+          selectedMode ? "max-w-[min(100%,1400px)]" : "max-w-5xl"
+        }`}
+      >
         <Link
           href="/dashboard"
           className="inline-flex items-center gap-2 text-sm text-[#9ca3af] transition-colors hover:text-white"

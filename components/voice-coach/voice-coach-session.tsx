@@ -56,6 +56,12 @@ interface VoiceCoachSessionProps {
   mode: VoiceCoachMode;
 }
 
+const SESSION_THREE_COLUMN_LAYOUT =
+  "flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6 xl:gap-10";
+const SESSION_HISTORY_COLUMN = "w-full shrink-0 lg:w-52";
+const SESSION_COACH_COLUMN = "min-w-0 w-full flex-1";
+const SESSION_TRANSCRIPT_COLUMN = "w-full shrink-0 lg:ml-auto lg:w-72 lg:max-w-[280px]";
+
 function getErrorContextText(context: unknown): string {
   if (context instanceof Error) return `${context.name} ${context.message}`;
   if (typeof context === "string") return context;
@@ -1268,15 +1274,16 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
   if (phase === "done") {
     return (
-      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className={SESSION_THREE_COLUMN_LAYOUT}>
         <HistorySidebar
           items={allHistoryItems}
           historyLoading={historyLoading}
           historyError={historyError}
           selectedHistoryId={effectiveSelectedHistoryId}
           onSelect={setSelectedHistoryId}
+          className={SESSION_HISTORY_COLUMN}
         />
-        <div className="space-y-5">
+        <div className={SESSION_COACH_COLUMN}>
           <div className="rounded-3xl border border-white/[0.08] bg-[#101014] p-8 shadow-[0_0_45px_rgba(139,92,246,0.1)]">
             <p className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
               <Sparkles className="h-3.5 w-3.5" />
@@ -1307,13 +1314,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
               }}
             />
           </div>
-          <HistoryContent
-            selectedHistoryItem={selectedHistoryItem}
-            selectedHistoryMessages={selectedHistoryMessages}
-            selectedHistoryIndex={selectedHistoryIndex}
-            coachAvatar={coachAvatar}
-          />
         </div>
+        <HistoryContent
+          selectedHistoryItem={selectedHistoryItem}
+          selectedHistoryMessages={selectedHistoryMessages}
+          selectedHistoryIndex={selectedHistoryIndex}
+          coachAvatar={coachAvatar}
+          className={SESSION_TRANSCRIPT_COLUMN}
+        />
       </div>
     );
   }
@@ -1350,15 +1358,16 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+    <div className={SESSION_THREE_COLUMN_LAYOUT}>
       <HistorySidebar
         items={allHistoryItems}
         historyLoading={historyLoading}
         historyError={historyError}
         selectedHistoryId={effectiveSelectedHistoryId}
         onSelect={setSelectedHistoryId}
+        className={SESSION_HISTORY_COLUMN}
       />
-      <div className="space-y-5">
+      <div className={`${SESSION_COACH_COLUMN} space-y-5`}>
         <div className="relative overflow-hidden rounded-3xl p-[1px]">
           <div
             aria-hidden
@@ -1592,13 +1601,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
             </div>
           </div>
         )}
-        <HistoryContent
-          selectedHistoryItem={selectedHistoryItem}
-          selectedHistoryMessages={selectedHistoryMessages}
-          selectedHistoryIndex={selectedHistoryIndex}
-          coachAvatar={coachAvatar}
-        />
       </div>
+      <HistoryContent
+        selectedHistoryItem={selectedHistoryItem}
+        selectedHistoryMessages={selectedHistoryMessages}
+        selectedHistoryIndex={selectedHistoryIndex}
+        coachAvatar={coachAvatar}
+        className={SESSION_TRANSCRIPT_COLUMN}
+      />
     </div>
   );
 }
@@ -1609,15 +1619,19 @@ function HistorySidebar({
   historyError,
   selectedHistoryId,
   onSelect,
+  className = "",
 }: {
   items: VoiceCoachHistoryItem[];
   historyLoading: boolean;
   historyError: string | null;
   selectedHistoryId: string | null;
   onSelect: (id: string) => void;
+  className?: string;
 }) {
   return (
-    <aside className="overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f]">
+    <aside
+      className={`overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f] ${className}`}
+    >
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
           Chat History
@@ -1675,32 +1689,31 @@ function HistoryContent({
   selectedHistoryMessages,
   selectedHistoryIndex,
   coachAvatar,
+  className = "",
 }: {
   selectedHistoryItem: VoiceCoachHistoryItem | null;
   selectedHistoryMessages: ConversationMessage[];
   selectedHistoryIndex: number;
   coachAvatar: (typeof MODE_COACH_AVATAR)[VoiceCoachMode];
+  className?: string;
 }) {
   if (!selectedHistoryItem) {
     return null;
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#111114]">
-      <div className="border-b border-white/10 px-5 py-3">
-        <p className="text-sm font-semibold text-white">
+    <section
+      className={`flex max-h-[74vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111114] ${className}`}
+    >
+      <div className="shrink-0 border-b border-white/10 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
+          Transcript
+        </p>
+        <p className="mt-1 line-clamp-2 text-sm font-semibold text-white">
           {formatConversationTitle(selectedHistoryItem, Math.max(0, selectedHistoryIndex))}
         </p>
-        {selectedHistoryItem?.summary && (
-          <p className="mt-1 text-xs text-[#9ca3af]">{selectedHistoryItem.summary}</p>
-        )}
-        {selectedHistoryItem?.task && (
-          <p className="mt-2 inline-flex max-w-full items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">
-            Task: {selectedHistoryItem.task}
-          </p>
-        )}
       </div>
-      <div className="max-h-[42vh] space-y-3 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {selectedHistoryMessages.length === 0 ? (
           <p className="text-sm text-[#9ca3af]">No transcript content found.</p>
         ) : (
