@@ -15,7 +15,11 @@ import {
   formatVoiceCoachConnectionError,
   isNegotiationTimeout,
 } from "@/lib/voice-coach-connection-errors";
-import { prepareMicrophoneForVoiceSession } from "@/lib/voice-coach-microphone";
+import {
+  prepareMicrophoneForVoiceSession,
+  releaseMicrophoneForVoiceSession,
+  VOICE_COACH_MIC_STABILIZATION_MS,
+} from "@/lib/voice-coach-microphone";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
@@ -69,6 +73,7 @@ function getErrorContextText(context: unknown): string {
 }
 
 const RETRY_CLOSE_DELAY_MS = 400;
+const MAX_NEGOTIATION_RETRIES = 2;
 
 type ConversationHandle = ReturnType<typeof useConversation>;
 
@@ -473,6 +478,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       historyLoadGenerationRef.current += 1;
       activeStartAttemptRef.current = ++startAttemptCounterRef.current;
       connectionLockRef.current = false;
+      releaseMicrophoneForVoiceSession();
       void (async () => {
         const conv = conversationRef.current;
         if (!conv || conv.status === "disconnected") return;
@@ -480,6 +486,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           await conv.endSession();
         } catch {
           // Socket may already be closed — stopping mic is best-effort on unmount.
+        } finally {
+          releaseMicrophoneForVoiceSession();
         }
       })();
     };
@@ -655,6 +663,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, []);
 
   const endSdkSessionIfOpen = useCallback(async () => {
+    releaseMicrophoneForVoiceSession();
     const conv = conversationRef.current;
     if (!conv || conv.status === "disconnected") {
       sessionStartedRef.current = false;
@@ -668,6 +677,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     } finally {
       sessionStartedRef.current = false;
       connectionLockRef.current = false;
+      releaseMicrophoneForVoiceSession();
     }
     await delayMs(RETRY_CLOSE_DELAY_MS);
   }, []);
@@ -693,6 +703,49 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       }
     },
     [],
+  );
+
+  const connectWithPending = useCallback(
+    async (pending: PendingConnect) => {
+      const sessionDevice = { inputDeviceId: inputDeviceIdRef.current };
+      if (pending.authMode === "signed" && pending.signedUrl) {
+        await startSdkSession({
+          signedUrl: pending.signedUrl,
+          connectionType: "websocket",
+          ...sessionDevice,
+          ...pending.sessionOptions,
+        });
+        return;
+      }
+      if (pending.authMode === "public" && pending.agentId) {
+        await startSdkSession({
+          agentId: pending.agentId,
+          connectionType: "webrtc",
+          ...sessionDevice,
+          ...pending.sessionOptions,
+        });
+      }
+    },
+    [startSdkSession],
+  );
+
+  const retryPendingConnect = useCallback(
+    async (hint: string) => {
+      const pending = pendingConnectRef.current;
+      if (!pending || phaseRef.current !== "loading") return;
+
+      setConnectHint(hint);
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
+
+      const mic = await prepareMicrophoneForVoiceSession();
+      inputDeviceIdRef.current = mic.inputDeviceId;
+      await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
+      await connectWithPending(pending);
+    },
+    [connectWithPending, endSdkSessionIfOpen],
   );
 
   onConnectRef.current = () => {
@@ -822,18 +875,33 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           return;
         }
         try {
-          await startSdkSession({
-            agentId: publicPending.agentId,
-            connectionType: "webrtc",
-            inputDeviceId: inputDeviceIdRef.current,
-            ...publicPending.sessionOptions,
-          });
+          await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+          await connectWithPending(publicPending);
         } catch (retryErr) {
           if (isMountedRef.current) {
             handleFallbackStartFailure(retryErr);
           }
         }
       })();
+      return;
+    }
+
+    if (
+      phaseRef.current === "loading" &&
+      pendingConnectRef.current &&
+      !loadingFailureHandledRef.current &&
+      isRetryableStartupFailure(message, context) &&
+      !isWebSocketClosedError(message, context) &&
+      negotiationRetriesRef.current < MAX_NEGOTIATION_RETRIES
+    ) {
+      negotiationRetriesRef.current += 1;
+      void retryPendingConnect(
+        `Voice handshake failed. Retrying (${negotiationRetriesRef.current}/${MAX_NEGOTIATION_RETRIES})…`,
+      ).catch((retryErr) => {
+        if (isMountedRef.current) {
+          handleFallbackStartFailure(retryErr);
+        }
+      });
       return;
     }
 
@@ -866,7 +934,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     connectionDelay: {
       android: 3_000,
       ios: 0,
-      default: 400,
+      default: 1_000,
     },
     onConnect: () => onConnectRef.current(),
     onDisconnect: () => onDisconnectRef.current(),
@@ -1049,6 +1117,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
       const mic = await prepareMicrophoneForVoiceSession();
       inputDeviceIdRef.current = mic.inputDeviceId;
+      await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -1118,22 +1191,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       }
 
       pendingConnectRef.current = pending;
-      const sessionDevice = { inputDeviceId: inputDeviceIdRef.current };
-      if (pending.authMode === "signed" && pending.signedUrl) {
-        await startSdkSession({
-          signedUrl: pending.signedUrl,
-          connectionType: "websocket",
-          ...sessionDevice,
-          ...pending.sessionOptions,
-        });
-      } else if (pending.authMode === "public" && pending.agentId) {
-        await startSdkSession({
-          agentId: pending.agentId,
-          connectionType: "webrtc",
-          ...sessionDevice,
-          ...pending.sessionOptions,
-        });
-      }
+      await connectWithPending(pending);
     } catch (err) {
       if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
         return;
@@ -1163,7 +1221,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         isStartingRef.current = false;
       }
     }
-  }, [conversation, endSdkSessionIfOpen, mode, startSdkSession]);
+  }, [connectWithPending, conversation, endSdkSessionIfOpen, mode]);
 
   const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
     const conversationId =
@@ -1196,11 +1254,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       return;
     }
 
+    releaseMicrophoneForVoiceSession();
     if (conversation.status !== "disconnected") {
       try {
         await conversation.endSession();
       } catch (err) {
         console.warn("[voice-coach] endSession skipped:", err);
+      } finally {
+        releaseMicrophoneForVoiceSession();
       }
     }
     sessionStartedRef.current = false;
