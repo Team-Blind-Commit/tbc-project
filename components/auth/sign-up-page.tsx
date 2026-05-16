@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Mic } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { createProfile } from "@/lib/profiles";
 
 const FEATURES = [
   "Real-time AI voice coaching — no typing, just talking",
@@ -37,10 +38,77 @@ function GoogleIcon() {
 export default function SignUpPage() {
   const router = useRouter();
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formMessage, setFormMessage] = useState<string | null>(null);
 
-  function handleGetStarted(e: React.FormEvent) {
+  async function handleGetStarted(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    router.push("/dashboard");
+    setFormError(null);
+    setFormMessage(null);
+    setIsSubmitting(true);
+
+    const form = e.currentTarget;
+    const username = (
+      form.elements.namedItem("username") as HTMLInputElement
+    ).value.trim();
+    const email = (
+      form.elements.namedItem("email") as HTMLInputElement
+    ).value.trim();
+    const password = (form.elements.namedItem("password") as HTMLInputElement)
+      .value;
+
+    if (!username || !email || !password) {
+      setFormError("Please fill in all fields.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setFormError("Password must be at least 6 characters.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const supabase = createClient();
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { username },
+      },
+    });
+
+    if (signUpError) {
+      console.error("[signup]", signUpError.message);
+      setFormError(signUpError.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (!data.user) {
+      setFormError("Sign up failed. Please try again.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const profileResult = await createProfile(supabase, data.user.id, username);
+    if (!profileResult.ok) {
+      setFormError(profileResult.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (data.session) {
+      router.push("/dashboard");
+      router.refresh();
+      return;
+    }
+
+    setFormMessage(
+      "Account created. Check your email to confirm, then sign in."
+    );
+    setIsSubmitting(false);
   }
 
   async function handleGoogleSignIn() {
@@ -116,18 +184,38 @@ export default function SignUpPage() {
             </a>
           </p>
 
-          <form onSubmit={handleGetStarted} className="mt-8 space-y-5">
+          {formError ? (
+            <p
+              role="alert"
+              className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+            >
+              {formError}
+            </p>
+          ) : null}
+          {formMessage ? (
+            <p className="mt-6 rounded-lg border border-[#7c3aed]/30 bg-[#7c3aed]/10 px-4 py-3 text-sm text-[#c4b5fd]">
+              {formMessage}
+            </p>
+          ) : null}
+
+          <form
+            method="post"
+            onSubmit={handleGetStarted}
+            className="mt-8 space-y-5"
+          >
             <div>
-              <label htmlFor="full-name" className="sr-only">
-                Full Name
+              <label htmlFor="username" className="sr-only">
+                Username
               </label>
               <input
-                id="full-name"
-                name="fullName"
+                id="username"
+                name="username"
                 type="text"
-                autoComplete="name"
-                placeholder="Your name"
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                autoComplete="username"
+                required
+                disabled={isSubmitting}
+                placeholder="Username"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
@@ -140,8 +228,10 @@ export default function SignUpPage() {
                 name="email"
                 type="email"
                 autoComplete="email"
+                required
+                disabled={isSubmitting}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
@@ -154,16 +244,20 @@ export default function SignUpPage() {
                 name="password"
                 type="password"
                 autoComplete="new-password"
+                required
+                minLength={6}
+                disabled={isSubmitting}
                 placeholder="Create a password"
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full rounded-[10px] bg-[#7c3aed] py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#6d28d9]"
+              disabled={isSubmitting || isGoogleLoading}
+              className="w-full rounded-[10px] bg-[#7c3aed] py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Get Started
+              {isSubmitting ? "Creating account…" : "Get Started"}
             </button>
 
             <div className="relative py-2">
