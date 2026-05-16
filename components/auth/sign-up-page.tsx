@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Mic } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 const FEATURES = [
   "Real-time AI voice coaching — no typing, just talking",
@@ -34,14 +36,27 @@ function GoogleIcon() {
 
 export default function SignUpPage() {
   const router = useRouter();
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   function handleGetStarted(e: React.FormEvent) {
     e.preventDefault();
     router.push("/dashboard");
   }
 
-  function handleGoogleSignIn() {
-    router.push("/dashboard");
+  async function handleGoogleSignIn() {
+    setIsGoogleLoading(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      console.error("[google-auth]", error);
+      setIsGoogleLoading(false);
+    }
   }
 
   return (
@@ -163,10 +178,11 @@ export default function SignUpPage() {
             <button
               type="button"
               onClick={handleGoogleSignIn}
-              className="flex w-full items-center justify-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#1a1a24] py-3.5 text-sm font-medium text-white transition-colors hover:border-white/[0.12] hover:bg-[#22222c]"
+              disabled={isGoogleLoading}
+              className="flex w-full items-center justify-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#1a1a24] py-3.5 text-sm font-medium text-white transition-colors hover:border-white/[0.12] hover:bg-[#22222c] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <GoogleIcon />
-              Continue with Google
+              {isGoogleLoading ? "Redirecting…" : "Continue with Google"}
             </button>
           </form>
 
