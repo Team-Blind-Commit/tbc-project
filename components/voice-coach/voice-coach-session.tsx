@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Link from "next/link";
 import {
-  MessageSquareText,
   Mic,
   Sparkles,
   Square,
@@ -30,6 +29,17 @@ interface ConversationMessage {
   role: ConversationMessageRole;
   text: string;
   timestamp: number;
+}
+
+interface VoiceCoachHistoryItem {
+  id: string;
+  title: string;
+  mode: string;
+  summary: string | null;
+  task: string | null;
+  transcript: string;
+  createdAt: string | null;
+  durationSeconds: number | null;
 }
 
 interface PendingConnect {
@@ -201,6 +211,67 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   return { role, text: text.trim(), timestamp: Date.now() };
 }
 
+function isSessionEndIntent(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const patterns = [
+    /\blet'?s end (this|the)?\s*session\b/,
+    /\bend (this|the)?\s*session\b/,
+    /\bstop (this|the)?\s*session\b/,
+    /\bfinish (this|the)?\s*session\b/,
+    /\bthat'?s all\b/,
+    /\bwe are done\b/,
+    /\bi am done\b/,
+  ];
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function summarizeMessageTitle(text: string): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) return "Untitled chat";
+  return normalized.length > 64 ? `${normalized.slice(0, 61).trim()}...` : normalized;
+}
+
+function formatConversationTitle(
+  item: VoiceCoachHistoryItem,
+  index: number,
+): string {
+  const fallback = `Session ${index + 1}`;
+  const title = item.title.trim();
+  if (!title) return fallback;
+  return title.length > 72 ? `${title.slice(0, 69).trim()}...` : title;
+}
+
+function normalizeTranscriptLines(transcript: string): ConversationMessage[] {
+  const lines = transcript
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  return lines.map((line, index) => {
+    const userMatch = line.match(/^\[(user|human)\]\s*(.+)$/i);
+    const agentMatch = line.match(/^\[(agent|assistant)\]\s*(.+)$/i);
+    if (userMatch?.[2]) {
+      return {
+        role: "user" as const,
+        text: userMatch[2].trim(),
+        timestamp: Date.now() + index,
+      };
+    }
+    if (agentMatch?.[2]) {
+      return {
+        role: "agent" as const,
+        text: agentMatch[2].trim(),
+        timestamp: Date.now() + index,
+      };
+    }
+    return {
+      role: "agent" as const,
+      text: line,
+      timestamp: Date.now() + index,
+    };
+  });
+}
+
 function HomeworkCard({ task, mode }: { task: string; mode: VoiceCoachMode }) {
   return (
     <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
@@ -317,7 +388,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [task, setTask] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
-  const [showMessages, setShowMessages] = useState(false);
+  const [historyItems, setHistoryItems] = useState<VoiceCoachHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [avatarBlinking, setAvatarBlinking] = useState(false);
   const [avatarMouthLevel, setAvatarMouthLevel] = useState<0 | 1 | 2 | 3>(0);
   const [avatarGaze, setAvatarGaze] = useState<"center" | "left" | "right">("center");
@@ -328,6 +402,103 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const pendingConnectRef = useRef<PendingConnect | null>(null);
   const negotiationRetriesRef = useRef(0);
   const sessionStartedRef = useRef(false);
+  const autoEndingRef = useRef(false);
+
+  const loadHistory = useCallback(async () => {
+    const userName = getStoredUserName();
+    if (!userName) {
+      setHistoryItems([]);
+      return;
+    }
+
+    setHistoryLoading(true);
+    setHistoryError(null);
+
+    try {
+      const response = await fetch("/api/voice-coach/history", {
+        headers: voiceCoachHeaders(),
+      });
+      const data = (await response.json()) as {
+        items?: VoiceCoachHistoryItem[];
+        error?: string;
+        warning?: string;
+        persisted?: boolean;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to load chat history");
+      }
+
+      setHistoryItems(data.items ?? []);
+      if (data.warning) {
+        setHistoryError(data.warning);
+      } else if (data.persisted === false) {
+        setHistoryError("History is temporarily unavailable.");
+      }
+    } catch (err) {
+      console.error("[voice-coach] history load failed:", err);
+      setHistoryError(
+        err instanceof Error ? err.message : "Failed to load chat history",
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadHistory();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadHistory]);
+
+  const liveConversationItem = useMemo(() => {
+    if (messages.length === 0) return null;
+    const firstMeaningfulMessage = messages.find((msg) => msg.text.trim().length > 0);
+    const title = firstMeaningfulMessage
+      ? summarizeMessageTitle(firstMeaningfulMessage.text)
+      : "Current conversation";
+
+    const transcript = messages
+      .map((message) => `[${message.role}] ${message.text}`)
+      .join("\n");
+
+    return {
+      id: "__current__",
+      title: `Current: ${title}`,
+      mode,
+      summary: null,
+      transcript,
+      createdAt: null,
+      durationSeconds: null,
+    } satisfies VoiceCoachHistoryItem;
+  }, [messages, mode]);
+
+  const allHistoryItems = useMemo(() => {
+    if (!liveConversationItem) return historyItems;
+    return [liveConversationItem, ...historyItems];
+  }, [historyItems, liveConversationItem]);
+
+  const effectiveSelectedHistoryId =
+    selectedHistoryId && allHistoryItems.some((item) => item.id === selectedHistoryId)
+      ? selectedHistoryId
+      : allHistoryItems[0]?.id ?? null;
+
+  const selectedHistoryItem = useMemo(
+    () => allHistoryItems.find((item) => item.id === effectiveSelectedHistoryId) ?? null,
+    [allHistoryItems, effectiveSelectedHistoryId],
+  );
+
+  const selectedHistoryMessages = useMemo(
+    () =>
+      selectedHistoryItem
+        ? normalizeTranscriptLines(selectedHistoryItem.transcript)
+        : [],
+    [selectedHistoryItem],
+  );
+  const selectedHistoryIndex = selectedHistoryItem
+    ? allHistoryItems.findIndex((item) => item.id === selectedHistoryItem.id)
+    : -1;
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -384,6 +555,18 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       if (normalized) {
         setMessages((current) => [...current, normalized]);
         transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+        if (
+          normalized.role === "user" &&
+          phaseRef.current === "active" &&
+          !autoEndingRef.current &&
+          isSessionEndIntent(normalized.text)
+        ) {
+          autoEndingRef.current = true;
+          setNotice("Ending session now — saving your task and chat history...");
+          window.setTimeout(() => {
+            void endSession(true);
+          }, 0);
+        }
         return;
       }
 
@@ -524,24 +707,30 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, [conversation]);
 
   const startSession = useCallback(async () => {
-    const userName = getOrCreateStoredUserName();
-
+    getOrCreateStoredUserName();
     setError(null);
     setNotice(null);
     setConnectHint(null);
     negotiationRetriesRef.current = 0;
     pendingConnectRef.current = null;
     sessionStartedRef.current = false;
+    autoEndingRef.current = false;
     phaseRef.current = "loading";
     setPhase("loading");
     setTask(null);
     setSummary(null);
     setMessages([]);
-    setShowMessages(false);
     transcriptRef.current = [];
 
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -636,7 +825,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     }
   }, [conversation, mode, safeEndConversation]);
 
-  const endSession = useCallback(async () => {
+  const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
     const userName = getStoredUserName() ?? getOrCreateStoredUserName();
     if (!userName) return;
 
@@ -648,6 +837,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     pendingConnectRef.current = null;
     negotiationRetriesRef.current = 0;
     setConnectHint(null);
+    autoEndingRef.current = true;
     setPhase("ending");
     const conversationId = getConversationId();
     if (!conversationId) {
@@ -688,6 +878,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         error?: string;
         task?: string;
         summary?: string;
+        warning?: string;
       }>(res);
 
       if (!res.ok) {
@@ -696,7 +887,15 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
       setTask(data.task ?? null);
       setSummary(data.summary ?? null);
+      if (data.warning) {
+        setNotice(data.warning);
+      } else if (triggeredByVoiceIntent) {
+        setNotice("Session ended from your voice command.");
+      } else {
+        setNotice(null);
+      }
       setPhase("done");
+      void loadHistory();
     } catch (err) {
       console.error("[voice-coach] end session failed:", err);
       setError(
@@ -707,32 +906,50 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       );
       phaseRef.current = "idle";
       setPhase("idle");
+    } finally {
+      autoEndingRef.current = false;
     }
-  }, [getConversationId, mode, safeEndConversation]);
+  }, [getConversationId, loadHistory, mode, safeEndConversation]);
+
+  const coachAvatar = MODE_COACH_AVATAR[mode];
 
   if (phase === "done") {
     return (
-      <div className="rounded-3xl border border-white/[0.08] bg-[#101014] p-8 shadow-[0_0_45px_rgba(139,92,246,0.1)]">
-        <p className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
-          <Sparkles className="h-3.5 w-3.5" />
-          Session complete
-        </p>
-        <h2 className="mt-3 text-2xl font-bold text-white">
-          Great work today in {mode}
-        </h2>
-        {summary && <p className="mt-2 text-sm text-[#9ca3af]">{summary}</p>}
-        {task && <HomeworkCard task={task} mode={mode} />}
-        <SessionActions
-          onPracticeAgain={() => {
-            phaseRef.current = "idle";
-            setPhase("idle");
-            setTask(null);
-            setSummary(null);
-            setShowMessages(false);
-          }}
-          onViewMessages={() => setShowMessages(true)}
-          canViewMessages={messages.length > 0}
+      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <HistorySidebar
+          items={allHistoryItems}
+          historyLoading={historyLoading}
+          historyError={historyError}
+          selectedHistoryId={effectiveSelectedHistoryId}
+          onSelect={setSelectedHistoryId}
         />
+        <div className="space-y-5">
+          <div className="rounded-3xl border border-white/[0.08] bg-[#101014] p-8 shadow-[0_0_45px_rgba(139,92,246,0.1)]">
+            <p className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
+              <Sparkles className="h-3.5 w-3.5" />
+              Session complete
+            </p>
+            <h2 className="mt-3 text-2xl font-bold text-white">
+              Great work today in {mode}
+            </h2>
+            {summary && <p className="mt-2 text-sm text-[#9ca3af]">{summary}</p>}
+            {task && <HomeworkCard task={task} mode={mode} />}
+            <SessionActions
+              onPracticeAgain={() => {
+                phaseRef.current = "idle";
+                setPhase("idle");
+                setTask(null);
+                setSummary(null);
+              }}
+            />
+          </div>
+          <HistoryContent
+            selectedHistoryItem={selectedHistoryItem}
+            selectedHistoryMessages={selectedHistoryMessages}
+            selectedHistoryIndex={selectedHistoryIndex}
+            coachAvatar={coachAvatar}
+          />
+        </div>
       </div>
     );
   }
@@ -755,22 +972,31 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       ? "Connecting"
       : "Disconnected";
   const modeSurface = MODE_SURFACE_STYLES[mode];
-  const coachAvatar = MODE_COACH_AVATAR[mode];
+  
 
   return (
-    <div className="relative overflow-hidden rounded-3xl p-[1px]">
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-0 rounded-3xl ${modeSurface.borderBase}`}
+    <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <HistorySidebar
+        items={allHistoryItems}
+        historyLoading={historyLoading}
+        historyError={historyError}
+        selectedHistoryId={effectiveSelectedHistoryId}
+        onSelect={setSelectedHistoryId}
       />
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute -inset-[125%] ${modeSurface.borderBeam} animate-[spin_8s_linear_infinite]`}
-      />
+      <div className="space-y-5">
+        <div className="relative overflow-hidden rounded-3xl p-[1px]">
+          <div
+            aria-hidden
+            className={`pointer-events-none absolute inset-0 rounded-3xl ${modeSurface.borderBase}`}
+          />
+          <div
+            aria-hidden
+            className={`pointer-events-none absolute -inset-[125%] ${modeSurface.borderBeam} animate-[spin_8s_linear_infinite]`}
+          />
 
-      <div
-        className={`relative overflow-hidden rounded-[calc(1.5rem-1px)] border border-white/[0.14] p-8 shadow-[0_0_40px_rgba(2,6,23,0.28)] backdrop-blur-2xl ${modeSurface.glassBase}`}
-      >
+          <div
+            className={`relative overflow-hidden rounded-[calc(1.5rem-1px)] border border-white/[0.14] p-8 shadow-[0_0_40px_rgba(2,6,23,0.28)] backdrop-blur-2xl ${modeSurface.glassBase}`}
+          >
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.1),rgba(255,255,255,0.03)_40%,rgba(255,255,255,0.005)_65%)]"
@@ -903,106 +1129,171 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           : ""}
       </p>
 
-      <div className="mt-6 flex flex-wrap justify-center gap-3">
-        {!isActive ? (
-          <button
-            type="button"
-            onClick={startSession}
-            disabled={isLoading}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-6 py-3 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#7c3aed] disabled:opacity-50"
-          >
-            <Mic className="h-4 w-4" />
-            {isLoading ? "Connecting…" : "Start Practicing Free"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={endSession}
-            disabled={phase === "ending"}
-            className="inline-flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-6 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:opacity-50"
-          >
-            <Square className="h-4 w-4" />
-            {phase === "ending" ? "Saving session…" : "End session"}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setShowMessages(true)}
-          disabled={messages.length === 0 || phase === "loading"}
-          className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 disabled:opacity-50"
-        >
-          <MessageSquareText className="h-4 w-4" />
-          View Messages {messages.length > 0 ? `(${messages.length})` : ""}
-        </button>
-      </div>
-
-      {showMessages && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="max-h-[80vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#111114] shadow-[0_0_40px_rgba(0,0,0,0.35)]">
-            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-              <h3 className="text-lg font-semibold text-white">Conversation</h3>
-              <button
-                type="button"
-                onClick={() => setShowMessages(false)}
-                className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/5"
-              >
-                Close
-              </button>
-            </div>
-            <div className="max-h-[65vh] space-y-3 overflow-y-auto px-5 py-4">
-              {messages.length === 0 ? (
-                <p className="text-sm text-[#9ca3af]">No messages yet.</p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {!isActive ? (
+                <button
+                  type="button"
+                  onClick={startSession}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-6 py-3 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#7c3aed] disabled:opacity-50"
+                >
+                  <Mic className="h-4 w-4" />
+                  {isLoading ? "Connecting…" : "Start Practicing Free"}
+                </button>
               ) : (
-                messages.map((message, index) => (
-                  <div
-                    key={`${message.timestamp}-${index}`}
-                    className={`rounded-xl border px-4 py-3 ${
-                      message.role === "agent"
-                        ? "border-[#8b5cf6]/25 bg-[#8b5cf6]/10"
-                        : "border-white/10 bg-[#0b0b0d]"
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
-                          message.role === "agent"
-                            ? "border-[#8b5cf6]/45 bg-[#8b5cf6]/20 text-[#d8b4fe]"
-                            : "border-white/15 bg-white/10 text-white"
-                        }`}
-                      >
-                        {message.role === "agent" ? (
-                          <CoachFace avatar={coachAvatar} speaking={false} size="small" />
-                        ) : (
-                          <UserRound className="h-4 w-4" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
-                          {message.role === "agent" ? coachAvatar.name : "You"}
-                        </p>
-                        <p className="mt-1 text-sm text-white">{message.text}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))
+                <button
+                  type="button"
+                  onClick={() => void endSession(false)}
+                  disabled={phase === "ending"}
+                  className="inline-flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-6 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:opacity-50"
+                >
+                  <Square className="h-4 w-4" />
+                  {phase === "ending" ? "Saving session…" : "End session"}
+                </button>
               )}
             </div>
           </div>
         </div>
-      )}
+        <HistoryContent
+          selectedHistoryItem={selectedHistoryItem}
+          selectedHistoryMessages={selectedHistoryMessages}
+          selectedHistoryIndex={selectedHistoryIndex}
+          coachAvatar={coachAvatar}
+        />
       </div>
     </div>
   );
 }
 
+function HistorySidebar({
+  items,
+  historyLoading,
+  historyError,
+  selectedHistoryId,
+  onSelect,
+}: {
+  items: VoiceCoachHistoryItem[];
+  historyLoading: boolean;
+  historyError: string | null;
+  selectedHistoryId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <aside className="overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f]">
+      <div className="border-b border-white/10 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
+          Chat History
+        </p>
+      </div>
+      <div className="max-h-[74vh] space-y-2 overflow-y-auto p-3">
+        {historyLoading && (
+          <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-[#9ca3af]">
+            Loading history...
+          </p>
+        )}
+        {historyError && (
+          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {historyError}
+          </p>
+        )}
+        {!historyLoading && items.length === 0 && (
+          <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-[#9ca3af]">
+            No chat history yet.
+          </p>
+        )}
+        {items.map((item, index) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelect(item.id)}
+            className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+              selectedHistoryId === item.id
+                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/15"
+                : "border-white/10 bg-[#111114] hover:bg-white/[0.04]"
+            }`}
+          >
+            <p className="text-xs text-[#9ca3af]">{item.mode}</p>
+            <p className="mt-1 text-sm font-medium text-white">
+              {formatConversationTitle(item, index)}
+            </p>
+          </button>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function HistoryContent({
+  selectedHistoryItem,
+  selectedHistoryMessages,
+  selectedHistoryIndex,
+  coachAvatar,
+}: {
+  selectedHistoryItem: VoiceCoachHistoryItem | null;
+  selectedHistoryMessages: ConversationMessage[];
+  selectedHistoryIndex: number;
+  coachAvatar: (typeof MODE_COACH_AVATAR)[VoiceCoachMode];
+}) {
+  if (!selectedHistoryItem) {
+    return null;
+  }
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#111114]">
+      <div className="border-b border-white/10 px-5 py-3">
+        <p className="text-sm font-semibold text-white">
+          {formatConversationTitle(selectedHistoryItem, Math.max(0, selectedHistoryIndex))}
+        </p>
+        {selectedHistoryItem?.summary && (
+          <p className="mt-1 text-xs text-[#9ca3af]">{selectedHistoryItem.summary}</p>
+        )}
+      </div>
+      <div className="max-h-[42vh] space-y-3 overflow-y-auto px-5 py-4">
+        {selectedHistoryMessages.length === 0 ? (
+          <p className="text-sm text-[#9ca3af]">No transcript content found.</p>
+        ) : (
+          selectedHistoryMessages.map((message, index) => (
+            <div
+              key={`${message.timestamp}-${index}`}
+              className={`rounded-xl border px-4 py-3 ${
+                message.role === "agent"
+                  ? "border-[#8b5cf6]/25 bg-[#8b5cf6]/10"
+                  : "border-white/10 bg-[#0b0b0d]"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                    message.role === "agent"
+                      ? "border-[#8b5cf6]/45 bg-[#8b5cf6]/20 text-[#d8b4fe]"
+                      : "border-white/15 bg-white/10 text-white"
+                  }`}
+                >
+                  {message.role === "agent" ? (
+                    <CoachFace avatar={coachAvatar} speaking={false} size="small" />
+                  ) : (
+                    <UserRound className="h-4 w-4" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
+                    {message.role === "agent" ? coachAvatar.name : "You"}
+                  </p>
+                  <p className="mt-1 text-sm text-white">{message.text}</p>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SessionActions({
   onPracticeAgain,
-  onViewMessages,
-  canViewMessages,
 }: {
   onPracticeAgain: () => void;
-  onViewMessages: () => void;
-  canViewMessages: boolean;
 }) {
   return (
     <div className="mt-8 flex flex-wrap gap-3">
@@ -1012,14 +1303,6 @@ function SessionActions({
         className="rounded-xl bg-[#8b5cf6] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#7c3aed]"
       >
         Practice again
-      </button>
-      <button
-        type="button"
-        onClick={onViewMessages}
-        disabled={!canViewMessages}
-        className="rounded-xl border border-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/5 disabled:opacity-50"
-      >
-        View Messages
       </button>
       <Link
         href="/dashboard"

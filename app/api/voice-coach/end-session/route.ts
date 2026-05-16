@@ -73,16 +73,29 @@ export async function POST(request: NextRequest) {
       });
     } catch (error) {
       console.error("[voice-coach/end-session] save failed:", error);
-      return NextResponse.json({ error: "Database save failed" }, { status: 500 });
+      return NextResponse.json({
+        sessionId: null,
+        summary: summary.summary,
+        task: summary.task,
+        strengths: summary.strengths,
+        weaknesses: summary.weaknesses,
+        persisted: false,
+        warning: "Session finished, but saving to history failed.",
+      });
     }
 
     const { sessionId, error: saveError, skipped } = saveResult;
 
     if (saveError && !skipped) {
-      return NextResponse.json(
-        { error: "Database save failed", details: saveError },
-        { status: 500 },
-      );
+      return NextResponse.json({
+        sessionId: null,
+        summary: summary.summary,
+        task: summary.task,
+        strengths: summary.strengths,
+        weaknesses: summary.weaknesses,
+        persisted: false,
+        warning: "Session finished, but saving to history failed.",
+      });
     }
 
     return NextResponse.json({
