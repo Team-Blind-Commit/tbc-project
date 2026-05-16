@@ -1,14 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceRateLimit, MAX_AUDIO_BYTES } from "@/lib/api-guards";
 import { getGroq } from "@/lib/groq";
 import { getOpenAI } from "@/lib/openai";
-import { createSupabaseServer } from "@/lib/supabase";
+import { createSupabaseServer } from "@/lib/supabase/server";
 import { assessTranscriptQuality } from "@/lib/transcript-quality";
 
-const COUNTER_SYSTEM = `You are Rex, an enthusiastic filler-word specialist. The user just practiced a speech on the given topic. Count every filler word in their transcript: um, uh, like, you know, basically, literally, actually, right, okay, so. List each filler with its exact count and give a total. Then give one encouraging tip to reduce fillers. Speak directly to them, warmly, like a real person. Keep it under 60 words so it sounds natural when spoken aloud.`;
+const JUDGE_VOICE_RULES = `Speak in first person to the speaker, like a supportive coach at a club meeting — warm, specific, never dismissive. This will be read aloud via text-to-speech, so use natural spoken sentences (no bullet lists, no markdown). Aim for 5–7 sentences; stay under ~110 words so it stays listenable.`;
 
-const GRAMMARIAN_SYSTEM = `You are Clara, a warm and precise grammar coach. The user just practiced a speech on the given topic. Find 2-3 specific grammar issues in their transcript, quote the problem phrase, and give the correction. Also highlight one thing they did grammatically well. Speak directly and warmly. Under 70 words — this will be spoken aloud.`;
+const COUNTER_SYSTEM = `You are Rex, an enthusiastic filler-word specialist at a speech club.
 
-const EVALUATOR_SYSTEM = `You are Marcus, an inspiring speech coach. The user practiced a speech on the given topic. Give an overall evaluation: comment on their clarity, structure, vocabulary richness, and relevance to the topic. Give a score out of 10. Give 2 specific actionable tips for next time. Be warm, direct, and motivating. Under 80 words — this will be spoken aloud.`;
+Count fillers in the transcript: um, uh, like, you know, basically, literally, actually, right, okay, so. Name each filler you heard with its count and give a total. Comment on whether fillers clustered anywhere. Give one practical tip to reduce them (e.g. pause instead of "um").
+
+If the session context says the speech was SHORT, say so kindly — you need more speech to judge patterns well — and suggest they try again for ~45–60 seconds while still noting what you heard this time.
+
+${JUDGE_VOICE_RULES}`;
+
+const GRAMMARIAN_SYSTEM = `You are Clara, a warm and precise grammar coach at a speech club.
+
+Find 1–3 specific grammar or phrasing issues. Quote the exact phrase from their transcript, then give a clearer way to say it. Highlight at least one thing they did well with their wording.
+
+If the speech was SHORT, acknowledge you only have a little to work with, encourage a longer practice round, and still give useful feedback on what they did say (don't invent problems that aren't in the transcript).
+
+${JUDGE_VOICE_RULES}`;
+
+const EVALUATOR_SYSTEM = `You are Marcus, an inspiring speech coach at a speech club.
+
+Evaluate their practice on the topic: clarity, structure (opening / points / close), vocabulary, and how well they stayed on topic. Give an honest score out of 10 in a natural way (e.g. "I'd give you a 6 out of 10"). Offer 2 concrete tips for next time.
+
+If the speech was SHORT, acknowledge it without being harsh — explain that a fuller ~45–60 second try will let you judge structure better — and suggest what to add next time (e.g. a hook, two supporting points, a closing line). Still score and encourage based on what they delivered.
+
+${JUDGE_VOICE_RULES}`;
+
+const JUDGE_MAX_TOKENS = 280;
+
+type SpeechLength = "brief" | "moderate" | "full";
+
+function getSpeechLength(
+  speechWordCount: number,
+  durationSeconds: number,
+): SpeechLength {
+  if (speechWordCount < 30 || (durationSeconds > 0 && durationSeconds < 25)) {
+    return "brief";
+  }
+  if (speechWordCount < 55 || (durationSeconds > 0 && durationSeconds < 50)) {
+    return "moderate";
+  }
+  return "full";
+}
+
+function buildJudgeUserContent(
+  topic: string,
+  transcript: string,
+  durationSeconds: number,
+  speechWordCount: number,
+): string {
+  const length = getSpeechLength(speechWordCount, durationSeconds);
+  const durationLine =
+    durationSeconds > 0
+      ? `Recording duration: ${durationSeconds} seconds`
+      : "Recording duration: (not reported)";
+
+  const lengthLines: Record<SpeechLength, string> = {
+    brief: `Session length: SHORT (about ${speechWordCount} words). This was only a quick attempt — judges should acknowledge that and encourage a fuller ~45–60 second practice while still giving real feedback.`,
+    moderate: `Session length: MODERATE (about ${speechWordCount} words). Room to develop ideas further on a longer take.`,
+    full: `Session length: FULL enough for a solid practice (about ${speechWordCount} words).`,
+  };
+
+  return [
+    `Topic: ${topic}`,
+    durationLine,
+    lengthLines[length],
+    "",
+    "Speech transcript:",
+    transcript,
+  ].join("\n");
+}
 
 async function getJudgeFeedback(
   systemPrompt: string,
@@ -21,7 +87,8 @@ async function getJudgeFeedback(
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      max_tokens: 200,
+      max_tokens: JUDGE_MAX_TOKENS,
+      temperature: 0.75,
     });
     return response.choices[0]?.message?.content?.trim() ?? "";
   } catch {
@@ -31,7 +98,8 @@ async function getJudgeFeedback(
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      max_tokens: 200,
+      max_tokens: JUDGE_MAX_TOKENS,
+      temperature: 0.75,
     });
     return fallback.choices[0]?.message?.content?.trim() ?? "";
   }
@@ -128,6 +196,9 @@ async function transcribeAudio(audio: Blob): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimited = enforceRateLimit(request, "analyze");
+    if (rateLimited) return rateLimited;
+
     const formData = await request.formData();
     const audio = formData.get("audio");
     const topic = formData.get("topic");
@@ -135,6 +206,15 @@ export async function POST(request: NextRequest) {
 
     if (!(audio instanceof Blob) || audio.size === 0) {
       return NextResponse.json({ error: "audio is required" }, { status: 400 });
+    }
+
+    if (audio.size > MAX_AUDIO_BYTES) {
+      return NextResponse.json(
+        {
+          error: `Recording is too large (max ${Math.round(MAX_AUDIO_BYTES / (1024 * 1024))} MB). Record a shorter speech and try again.`,
+        },
+        { status: 413 },
+      );
     }
 
     if (!topic || typeof topic !== "string" || !topic.trim()) {
@@ -168,13 +248,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userContent = `Topic: ${topicStr}\n\nSpeech transcript:\n${transcript}`;
+    const userContent = buildJudgeUserContent(
+      topicStr,
+      transcript,
+      durationSeconds,
+      quality.speechWordCount,
+    );
 
     const [counter, grammarian, evaluator] = await Promise.all([
       getJudgeFeedback(COUNTER_SYSTEM, userContent),
       getJudgeFeedback(GRAMMARIAN_SYSTEM, userContent),
       getJudgeFeedback(EVALUATOR_SYSTEM, userContent),
     ]);
+
+    if (
+      !counter.trim() ||
+      !grammarian.trim() ||
+      !evaluator.trim()
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not generate judge feedback. Please try again in a moment.",
+        },
+        { status: 502 },
+      );
+    }
 
     try {
       const supabase = await createSupabaseServer();

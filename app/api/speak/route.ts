@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  enforceRateLimit,
+  MAX_SPEAK_TEXT_LENGTH,
+} from "@/lib/api-guards";
 
 const ELEVENLABS_TIMEOUT_MS = 60_000;
 
@@ -17,6 +21,9 @@ function elevenLabsErrorMessage(status: number, body: string): string {
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimited = enforceRateLimit(request, "speak");
+    if (rateLimited) return rateLimited;
+
     const body = (await request.json()) as { text?: string; voiceId?: string };
 
     if (!body.text || typeof body.text !== "string" || !body.text.trim()) {
@@ -34,6 +41,13 @@ export async function POST(request: NextRequest) {
     if (text.length < 12) {
       return NextResponse.json(
         { error: "Nothing to speak — record clearer speech first." },
+        { status: 400 },
+      );
+    }
+
+    if (text.length > MAX_SPEAK_TEXT_LENGTH) {
+      return NextResponse.json(
+        { error: "Feedback text is too long to play back." },
         { status: 400 },
       );
     }

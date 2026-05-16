@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceRateLimit } from "@/lib/api-guards";
 import { getGroq } from "@/lib/groq";
 import { getOpenAI } from "@/lib/openai";
+
+const MAX_TOPIC_INPUT_LENGTH = 500;
 
 const SYSTEM_PROMPT =
   'You are a speech topic generator. Generate a short, interesting topic for a 1-minute practice speech. Return ONLY a JSON object with two fields: topic (a one-line speech title) and suggestion (2 sentences max on how to approach it). No markdown, no explanation, just the JSON.';
@@ -50,12 +53,22 @@ async function generateTopic(userMessage: string): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimited = enforceRateLimit(request, "generate-topic");
+    if (rateLimited) return rateLimited;
+
     let userInput: string | undefined;
 
     try {
       const body = (await request.json()) as { userInput?: string };
       if (body.userInput && typeof body.userInput === "string") {
-        userInput = body.userInput.trim() || undefined;
+        const trimmed = body.userInput.trim();
+        if (trimmed.length > MAX_TOPIC_INPUT_LENGTH) {
+          return NextResponse.json(
+            { error: "Topic hint is too long." },
+            { status: 400 },
+          );
+        }
+        userInput = trimmed || undefined;
       }
     } catch {
       // Empty body is fine — generate a fresh topic

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Mic } from "lucide-react";
 import type { AnalysisResult, SelectedVoices } from "@/lib/speech-eval";
+import { MAX_RECORDING_SECONDS } from "@/lib/api-guards";
 import {
   COUNTER_VOICES,
   DEFAULT_VOICES,
@@ -105,6 +106,14 @@ export function Recorder({ topic, onAnalysisComplete }: RecorderProps) {
       timerRef.current = setInterval(() => {
         elapsedRef.current += 1;
         setElapsed(elapsedRef.current);
+
+        if (elapsedRef.current >= MAX_RECORDING_SECONDS) {
+          stopTimer();
+          const active = mediaRecorderRef.current;
+          if (active && active.state !== "inactive") {
+            active.stop();
+          }
+        }
       }, 1000);
     } catch {
       setError("Microphone access denied. Please allow mic access and try again.");
@@ -251,6 +260,11 @@ export function Recorder({ topic, onAnalysisComplete }: RecorderProps) {
 
           <p className="font-mono text-3xl font-bold tabular-nums text-white">
             {formatTime(elapsed)}
+          </p>
+
+          <p className="text-center text-xs text-gray-500">
+            Max {Math.floor(MAX_RECORDING_SECONDS / 60)} minutes — recording stops
+            automatically
           </p>
 
           <button
