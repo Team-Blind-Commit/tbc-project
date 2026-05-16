@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { ActionPointsPanel } from "./action-points-panel";
-import { BottomPanels } from "./bottom-panels";
+import { BottomPanels, type RecentSession } from "./bottom-panels";
 import { PracticeCards } from "./practice-cards";
 import { Sidebar } from "./sidebar";
 import { StatsRow } from "./stats-row";
@@ -102,7 +102,7 @@ export async function DashboardPage() {
     return mode || "Practice Session";
   };
 
-  const recentSessions = allSessions.slice(0, 5).map((row) => {
+  const recentSessions: RecentSession[] = allSessions.slice(0, 5).map((row) => {
     const duration = Number(row.duration_seconds) || 0;
     const minutes = Math.max(1, Math.round(duration / 60));
     const date = new Date(String(row.created_at));
@@ -120,14 +120,13 @@ export async function DashboardPage() {
       date: `${dateLabel} · ${minutes} min`,
       score: Number.isFinite(score) ? score.toFixed(1) : "—",
       scoreClass: Number.isFinite(score) ? "text-emerald-400" : "text-[#9ca3af]",
-      iconKey:
-        row.feature === "speech_eval"
-          ? "Users"
-          : row.mode === "Debate"
-            ? "Swords"
-            : row.mode === "Presentation"
-              ? "Presentation"
-              : "Mic",
+      iconKey: (row.feature === "speech_eval"
+        ? "Users"
+        : row.mode === "Debate"
+          ? "Swords"
+          : row.mode === "Presentation"
+            ? "Presentation"
+            : "Mic") satisfies RecentSession["iconKey"],
       iconBg:
         row.feature === "speech_eval"
           ? "bg-teal-500/15"
