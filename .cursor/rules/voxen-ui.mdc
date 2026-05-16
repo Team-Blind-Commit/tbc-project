@@ -1,0 +1,42 @@
+---
+description: Voxen UI standards and V0 → Cursor integration workflow
+globs: "**/*.tsx"
+alwaysApply: false
+---
+
+# UI Standards
+
+- Background: `#0a0a0a` (near-black)
+- Accent: amber/gold `#f59e0b` — one accent, used consistently
+- Interactive components: four states — idle / loading / ready / active
+- Always show loading states
+- Mobile-first: stack cards below `768px`
+- Use Tailwind `transition` classes between states
+- Surface errors on screen, not only in console
+
+## V0 + Cursor workflow
+
+**V0 (v0.dev):** Generate visual UI — cards, buttons, dashboards, landing pages, animations.
+
+**Cursor:** Wire logic — props, API calls, state, TypeScript types, audio recording, API routes, DB.
+
+1. Build UI in v0.dev → copy code → paste into component file in Cursor
+2. In Agent chat, specify real props and handlers, e.g.:
+
+```
+Connect this V0 component to real data:
+- Cards receive props: { counter, grammarian, evaluator } (AI feedback strings)
+- Play button onClick → playVoice(text, voiceId)
+- Loading when isAnalyzing is true
+- Voice IDs: counter=DODLEQrClDo8wCz460ld, grammarian=AeRdCCKzvd23BpJoofzx, evaluator=EST9Ui6982FZPSi7gCHi
+Add TypeScript props and wire handlers.
+```
+
+| Use V0 first              | Use Cursor directly      |
+|---------------------------|--------------------------|
+| Cards, buttons, dashboards| API routes               |
+| Visual / animated UI      | Supabase queries         |
+| Landing / onboarding      | Audio recording logic    |
+|                           | Error handling           |
+
+Do not ask Cursor to redesign components V0 already built — integrate only.
