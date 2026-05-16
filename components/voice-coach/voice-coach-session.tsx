@@ -14,11 +14,6 @@ import {
   formatVoiceCoachConnectionError,
   isNegotiationTimeout,
 } from "@/lib/voice-coach-connection-errors";
-import {
-  getOrCreateStoredUserName,
-  getStoredUserName,
-  voiceCoachHeaders,
-} from "@/lib/voice-coach-client";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
@@ -272,6 +267,10 @@ function normalizeTranscriptLines(transcript: string): ConversationMessage[] {
   });
 }
 
+function nowTimestamp(): number {
+  return Date.now();
+}
+
 function HomeworkCard({ task, mode }: { task: string; mode: VoiceCoachMode }) {
   return (
     <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
@@ -405,19 +404,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const autoEndingRef = useRef(false);
 
   const loadHistory = useCallback(async () => {
-    const userName = getStoredUserName();
-    if (!userName) {
-      setHistoryItems([]);
-      return;
-    }
-
     setHistoryLoading(true);
     setHistoryError(null);
 
     try {
-      const response = await fetch("/api/voice-coach/history", {
-        headers: voiceCoachHeaders(),
-      });
+      const response = await fetch("/api/voice-coach/history");
       const data = (await response.json()) as {
         items?: VoiceCoachHistoryItem[];
         error?: string;
@@ -659,8 +650,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
   useEffect(() => {
     if (!avatarIsActive) {
-      setAvatarMouthLevel(0);
-      setAvatarHeadMotionClass("rotate-0 translate-y-0");
       return;
     }
 
@@ -685,7 +674,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     };
   }, [avatarIsActive, avatarIsSpeaking]);
 
-  const safeEndConversation = useCallback(() => {
+  function safeEndConversation() {
     if (!sessionStartedRef.current) return;
     try {
       conversation.endSession();
@@ -694,9 +683,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     } finally {
       sessionStartedRef.current = false;
     }
-  }, [conversation]);
+  }
 
-  const getConversationId = useCallback((): string | undefined => {
+  function getConversationId(): string | undefined {
     if (!sessionStartedRef.current) return undefined;
     try {
       return conversation.getId() || undefined;
@@ -704,10 +693,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       console.warn("[voice-coach] getId skipped:", err);
       return undefined;
     }
-  }, [conversation]);
+  }
 
-  const startSession = useCallback(async () => {
-    getOrCreateStoredUserName();
+  async function startSession() {
     setError(null);
     setNotice(null);
     setConnectHint(null);
@@ -734,7 +722,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
-        { headers: voiceCoachHeaders() },
       );
 
       const data = await parseApiJson<{
@@ -767,7 +754,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         setConnectHint("Connecting securely…");
       }
 
-      startedAtRef.current = Date.now();
+      startedAtRef.current = nowTimestamp();
 
       const sessionOptions = {
         dynamicVariables: {
@@ -823,12 +810,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       phaseRef.current = "idle";
       setPhase("idle");
     }
-  }, [conversation, mode, safeEndConversation]);
+  }
 
-  const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
-    const userName = getStoredUserName() ?? getOrCreateStoredUserName();
-    if (!userName) return;
-
+  async function endSession(triggeredByVoiceIntent = false) {
     if (phaseRef.current !== "active" && !sessionStartedRef.current) {
       console.warn("[voice-coach] endSession called with no active conversation");
       return;
@@ -852,7 +836,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     safeEndConversation();
 
     const durationSeconds = Math.round(
-      (Date.now() - startedAtRef.current) / 1000,
+      (nowTimestamp() - startedAtRef.current) / 1000,
     );
     const transcript =
       transcriptRef.current.join("\n") ||
@@ -863,11 +847,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...voiceCoachHeaders(),
         },
         body: JSON.stringify({
           mode,
-          user_name: userName,
           transcript,
           duration_seconds: durationSeconds,
           conversation_id: conversationId,
@@ -909,7 +891,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     } finally {
       autoEndingRef.current = false;
     }
-  }, [getConversationId, loadHistory, mode, safeEndConversation]);
+  }
 
   const coachAvatar = MODE_COACH_AVATAR[mode];
 

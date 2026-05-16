@@ -5,7 +5,7 @@ import {
   getElevenLabsAgentId,
   getElevenLabsApiKey,
 } from "@/lib/elevenlabs-config";
-import { getUserNameFromHeader } from "@/lib/user-name";
+import { requireUser } from "@/lib/supabase/require-user";
 import { isVoiceCoachMode } from "@/lib/voice-coach-modes";
 import { getVoiceCoachConfigError } from "@/lib/voice-coach-env";
 import {
@@ -16,14 +16,7 @@ import {
 export async function GET(request: NextRequest) {
   try {
     const mode = request.nextUrl.searchParams.get("mode");
-    const userName = getUserNameFromHeader(request);
-
-    if (!userName) {
-      return NextResponse.json(
-        { error: "user_name is required (x-user-name header)" },
-        { status: 400 },
-      );
-    }
+    const user = await requireUser();
 
     if (!mode || !isVoiceCoachMode(mode)) {
       return NextResponse.json(
@@ -39,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     const apiKey = getElevenLabsApiKey()!;
     const agentId = getElevenLabsAgentId()!;
-    const memory = await buildCoachMemory(userName, mode);
+    const memory = await buildCoachMemory(user.id, mode);
 
     const signed = await fetchElevenLabsSignedUrl(agentId, apiKey);
 

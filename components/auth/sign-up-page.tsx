@@ -15,7 +15,6 @@ import {
 } from '@/lib/auth-redirect'
 import { saveProfileViaApi } from '@/lib/profile-api'
 import { createClient } from '@/lib/supabase/client'
-import { setStoredUserName } from '@/lib/voice-coach-client'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60'
@@ -100,8 +99,6 @@ export default function SignUpPage() {
       setIsSubmitting(false)
       return
     }
-
-    setStoredUserName(username)
 
     const destination = buildPostLoginPath(nextPath, modeParam)
     router.push(destination)

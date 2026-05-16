@@ -1,14 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft, Brain, Sparkles, Timer } from "lucide-react";
 import { VoiceCoachSession } from "@/components/voice-coach/voice-coach-session";
-import {
-  getOrCreateStoredUserName,
-  isAnonymousVoiceCoachUser,
-} from "@/lib/voice-coach-client";
 import {
   parseModeFromQuery,
   VOICE_COACH_MODES,
@@ -50,24 +46,11 @@ export function VoiceCoachPage() {
   const searchParams = useSearchParams();
   const modeParam = searchParams.get("mode");
   const coachParam = searchParams.get("coach");
+  const initialMode = parseModeFromQuery(modeParam, coachParam);
 
-  const initialMode = useMemo(
-    () => parseModeFromQuery(modeParam, coachParam),
-    [modeParam, coachParam],
-  );
-
-  const [mounted, setMounted] = useState(false);
+  const mounted = true;
   const [pickedMode, setPickedMode] = useState<VoiceCoachMode | null>(null);
-  const [modeFromUrl, setModeFromUrl] = useState<VoiceCoachMode | null>(null);
-  const selectedMode = pickedMode ?? modeFromUrl;
-  const [userName, setUserName] = useState("Guest");
-  const showGuestBanner = mounted && isAnonymousVoiceCoachUser(userName);
-
-  useEffect(() => {
-    setMounted(true);
-    setModeFromUrl(initialMode);
-    setUserName(getOrCreateStoredUserName());
-  }, [initialMode]);
+  const selectedMode = pickedMode ?? initialMode;
 
   const showOliviaPicker =
     mounted && coachParam === "olivia" && !selectedMode;
@@ -135,16 +118,6 @@ export function VoiceCoachPage() {
             </div>
           </div>
         </div>
-
-        {showGuestBanner && (
-          <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-            Practicing as Guest.{" "}
-            <Link href="/login?next=/voice-coach" className="underline">
-              Sign in with your name
-            </Link>{" "}
-            to save homework across sessions.
-          </p>
-        )}
 
         <div className="mt-8">
           <p className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">

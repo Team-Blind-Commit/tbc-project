@@ -17,11 +17,9 @@ export async function createClient() {
             cookieStore.set(name, value, options),
           );
         } catch {
-          // setAll from Server Component — session refresh handled in proxy.
+          // setAll from Server Component — session refresh handled in middleware.
         }
       },
     },
   });
 }
-
-export const createSupabaseServer = createClient;

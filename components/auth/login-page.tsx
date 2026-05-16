@@ -2,12 +2,13 @@
 
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AuthAlert } from '@/components/auth/auth-alert'
 import { AuthDivider } from '@/components/auth/auth-divider'
 import { AuthFormPanel } from '@/components/auth/auth-form-panel'
 import { AuthShell } from '@/components/auth/auth-shell'
 import { GoogleSignInButton } from '@/components/auth/google-sign-in-button'
+import { buildPostLoginPath } from '@/lib/auth-redirect'
 import { ensureProfileViaApi } from '@/lib/profile-api'
 import { createClient } from '@/lib/supabase/client'
 
@@ -17,13 +18,14 @@ const INPUT_CLASS =
 export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const nextPath = searchParams.get('next') ?? '/dashboard'
+  const modeParam = searchParams.get('mode')
+  const authErrorMessage =
+    searchParams.get('error') === 'auth'
+      ? 'Sign-in was cancelled or failed. Please try again.'
+      : null
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
-  useEffect(() => {
-    if (searchParams.get('error') === 'auth') {
-      setFormError('Sign-in was cancelled or failed. Please try again.')
-    }
-  }, [searchParams])
 
   async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -68,7 +70,7 @@ export default function LoginPage() {
 
     await ensureProfileViaApi()
 
-    router.push('/dashboard')
+    router.push(buildPostLoginPath(nextPath, modeParam))
     router.refresh()
   }
 
@@ -88,7 +90,9 @@ export default function LoginPage() {
           </Link>
         </p>
 
-        {formError ? <AuthAlert variant="error">{formError}</AuthAlert> : null}
+        {formError || authErrorMessage ? (
+          <AuthAlert variant="error">{formError ?? authErrorMessage}</AuthAlert>
+        ) : null}
 
         <form onSubmit={handleLogin} className="mt-8 space-y-5">
           <div>

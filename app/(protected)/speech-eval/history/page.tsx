@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { supabaseBrowser } from "@/lib/supabase/browser";
 import { FILLER_WORDS } from "@/lib/speech-eval";
 import {
   getLocalSessions,
@@ -193,28 +192,22 @@ export default function SpeechEvalHistoryPage() {
       const local = getLocalSessions();
 
       try {
-        const {
-          data: { user },
-        } = await supabaseBrowser.auth.getUser();
-
-        if (user) {
-          const { data, error } = await supabaseBrowser
-            .from("speech_sessions")
-            .select("*")
-            .eq("user_id", user.id)
-            .order("created_at", { ascending: false })
-            .limit(20);
-
-          if (!error && data?.length) {
-            const cloud: HistorySession[] = data.map((row) => ({
-              id: row.id as string,
-              topic: row.topic as string,
-              duration_seconds: (row.duration_seconds as number) ?? 0,
-              transcript: row.transcript as string,
-              counter_feedback: row.counter_feedback as string,
-              grammarian_feedback: row.grammarian_feedback as string,
-              evaluator_feedback: row.evaluator_feedback as string,
-              created_at: row.created_at as string,
+        const res = await fetch("/api/speech-eval/history");
+        if (res.ok) {
+          const payload = (await res.json()) as {
+            sessions?: Array<Record<string, unknown>>;
+          };
+          const rows = payload.sessions ?? [];
+          if (rows.length > 0) {
+            const cloud: HistorySession[] = rows.map((row) => ({
+              id: String(row.id ?? ""),
+              topic: String(row.topic ?? ""),
+              duration_seconds: Number(row.duration_seconds ?? 0),
+              transcript: String(row.transcript ?? ""),
+              counter_feedback: String(row.counter_feedback ?? ""),
+              grammarian_feedback: String(row.grammarian_feedback ?? ""),
+              evaluator_feedback: String(row.evaluator_feedback ?? ""),
+              created_at: String(row.created_at ?? new Date().toISOString()),
               source: "cloud" as const,
             }));
             setHasCloudSessions(true);

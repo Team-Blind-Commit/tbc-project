@@ -1,20 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchOpenHomework } from "@/lib/build-coach-memory";
-import { getUserNameFromHeader } from "@/lib/user-name";
-import { getSupabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/supabase/require-user";
 
 export async function GET(request: NextRequest) {
   try {
-    const userName = getUserNameFromHeader(request);
-
-    if (!userName) {
-      return NextResponse.json(
-        { error: "user_name is required (x-user-name header)" },
-        { status: 400 },
-      );
-    }
-
-    const tasks = await fetchOpenHomework(userName);
+    void request;
+    const user = await requireUser();
+    const tasks = await fetchOpenHomework(user.id);
     return NextResponse.json({ tasks });
   } catch (error) {
     console.error("[voice-coach/tasks] error:", error);
@@ -24,18 +17,11 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const userName = getUserNameFromHeader(request);
+    const user = await requireUser();
     const body = (await request.json()) as {
       task_id?: string;
       completed?: boolean;
     };
-
-    if (!userName) {
-      return NextResponse.json(
-        { error: "user_name is required (x-user-name header)" },
-        { status: 400 },
-      );
-    }
 
     const taskId = body.task_id?.trim();
     if (!taskId) {
@@ -52,13 +38,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabase();
-    if (!supabase) {
-      return NextResponse.json(
-        { error: "Supabase is not configured" },
-        { status: 503 },
-      );
-    }
+    const supabase = await createClient();
 
     const { data, error } = await supabase
       .from("action_points")
@@ -67,7 +47,7 @@ export async function PATCH(request: NextRequest) {
         completed_at: body.completed !== false ? new Date().toISOString() : null,
       })
       .eq("id", taskId)
-      .eq("user_name", userName)
+      .eq("user_id", user.id)
       .select("id")
       .limit(1);
 

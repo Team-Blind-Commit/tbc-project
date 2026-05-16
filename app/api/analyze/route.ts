@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { enforceRateLimit, MAX_AUDIO_BYTES } from "@/lib/api-guards";
 import { getGroq } from "@/lib/groq";
 import { getOpenAI } from "@/lib/openai";
-import { createSupabaseServer } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/supabase/require-user";
 import { assessTranscriptQuality } from "@/lib/transcript-quality";
 
 const JUDGE_VOICE_RULES = `Speak in first person to the speaker, like a supportive coach at a club meeting — warm, specific, never dismissive. This will be read aloud via text-to-speech, so use natural spoken sentences (no bullet lists, no markdown). Aim for 5–7 sentences; stay under ~110 words so it stays listenable.`;
@@ -196,6 +197,7 @@ async function transcribeAudio(audio: Blob): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await requireUser();
     const rateLimited = enforceRateLimit(request, "analyze");
     if (rateLimited) return rateLimited;
 
@@ -276,27 +278,22 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const supabase = await createSupabaseServer();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const supabase = await createClient();
+      const evaluatorScore = extractScore(evaluator);
 
-      if (user) {
-        const evaluatorScore = extractScore(evaluator);
-
-        await supabase.from("speech_sessions").insert({
-          user_id: user.id,
-          topic: topicStr,
-          duration_seconds: durationSeconds,
-          transcript,
-          counter_feedback: counter,
-          grammarian_feedback: grammarian,
-          evaluator_feedback: evaluator,
-          ...(evaluatorScore !== null
-            ? { evaluator_score: evaluatorScore }
-            : {}),
-        });
-      }
+      await supabase.from("sessions").insert({
+        user_id: user.id,
+        topic: topicStr,
+        feature: "speech_eval",
+        duration_seconds: durationSeconds,
+        transcript,
+        counter_feedback: counter,
+        grammarian_feedback: grammarian,
+        evaluator_feedback: evaluator,
+        ...(evaluatorScore !== null
+          ? { evaluator_score: evaluatorScore }
+          : {}),
+      });
     } catch (saveError) {
       console.error("[analyze] save session error:", saveError);
     }
