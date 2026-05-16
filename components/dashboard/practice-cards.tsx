@@ -45,7 +45,10 @@ export function PracticeCards() {
           </Link>
         </article>
 
-        <article className="flex min-h-[320px] flex-col rounded-xl border border-white/[0.06] bg-[#1a1a24] p-8">
+        <Link
+          href="/speech-eval"
+          className="flex min-h-[320px] flex-col rounded-xl border border-white/[0.06] bg-[#1a1a24] p-8 transition-all duration-200 hover:scale-[1.02] hover:border-teal-500/50 hover:shadow-[0_0_24px_rgba(20,184,166,0.2)]"
+        >
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/15">
             <Users className="h-5 w-5 text-teal-400" strokeWidth={2} />
           </div>
@@ -64,14 +67,11 @@ export function PracticeCards() {
               </span>
             ))}
           </div>
-          <Link
-            href="/speech-eval"
-            className="mt-6 inline-flex w-fit items-center gap-2 rounded-xl border border-teal-500/50 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-teal-500/15"
-          >
+          <span className="mt-6 inline-flex w-fit items-center gap-2 rounded-xl border border-teal-500/50 px-5 py-2.5 text-sm font-semibold text-white">
             Submit a Speech
             <ArrowRight className="h-4 w-4" />
-          </Link>
-        </article>
+          </span>
+        </Link>
       </div>
     </section>
   );
