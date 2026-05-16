@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Link from "next/link";
-import { MessageSquareText, Mic, MicOff, Sparkles, Square } from "lucide-react";
+import {
+  MessageSquareText,
+  Mic,
+  Sparkles,
+  Square,
+  UserRound,
+} from "lucide-react";
 import { parseApiJson } from "@/lib/parse-api-response";
 import {
   formatVoiceCoachConnectionError,
@@ -96,6 +102,46 @@ const MODE_SURFACE_STYLES: Record<
   },
 };
 
+const MODE_COACH_AVATAR: Record<
+  VoiceCoachMode,
+  {
+    name: string;
+    ring: string;
+    hair: string;
+    skin: string;
+    shirt: string;
+  }
+> = {
+  Interview: {
+    name: "Iris",
+    ring: "border-blue-400/45",
+    hair: "bg-[#2a2f4f]",
+    skin: "bg-[#f2c8a0]",
+    shirt: "bg-blue-500/45",
+  },
+  Debate: {
+    name: "Rex",
+    ring: "border-rose-400/45",
+    hair: "bg-[#3a2315]",
+    skin: "bg-[#d8a17a]",
+    shirt: "bg-rose-500/45",
+  },
+  Presentation: {
+    name: "Nova",
+    ring: "border-emerald-400/45",
+    hair: "bg-[#2b3a2f]",
+    skin: "bg-[#ecc39f]",
+    shirt: "bg-emerald-500/45",
+  },
+  "Impromptu Speaking": {
+    name: "Lyra",
+    ring: "border-violet-400/45",
+    hair: "bg-[#2e2745]",
+    skin: "bg-[#e8ba94]",
+    shirt: "bg-violet-500/45",
+  },
+};
+
 function getSessionHeading(isActive: boolean, isLoading: boolean): string {
   if (isActive) return "Live coaching session";
   if (isLoading) return "Connecting...";
@@ -169,6 +215,92 @@ function HomeworkCard({ task, mode }: { task: string; mode: VoiceCoachMode }) {
   );
 }
 
+function CoachFace({
+  avatar,
+  speaking,
+  blinking = false,
+  mouthLevel = 0,
+  gaze = "center",
+  headMotionClass = "rotate-0 translate-y-0",
+  size,
+}: {
+  avatar: (typeof MODE_COACH_AVATAR)[VoiceCoachMode];
+  speaking: boolean;
+  blinking?: boolean;
+  mouthLevel?: 0 | 1 | 2 | 3;
+  gaze?: "center" | "left" | "right";
+  headMotionClass?: string;
+  size: "large" | "small";
+}) {
+  const shell = size === "large" ? "h-24 w-24" : "h-9 w-9";
+  const face = size === "large" ? "h-14 w-14" : "h-5.5 w-5.5";
+  const eyeWhite = size === "large" ? "h-3 w-3.5" : "h-1.5 w-2";
+  const pupil = size === "large" ? "h-1.5 w-1.5" : "h-0.5 w-0.5";
+  const mouth = size === "large" ? "w-6" : "w-2.5";
+  const shoulders = size === "large" ? "h-5 w-12" : "h-2 w-4";
+  const mouthClass =
+    size === "large"
+      ? ["h-1.5", "h-2", "h-2.5", "h-3"][mouthLevel]
+      : ["h-0.5", "h-1", "h-1", "h-1.5"][mouthLevel];
+  const pupilOffsetClass =
+    gaze === "left" ? "-translate-x-0.5" : gaze === "right" ? "translate-x-0.5" : "translate-x-0";
+
+  return (
+    <div
+      className={`relative flex ${shell} items-center justify-center rounded-full border bg-[#0a0a0f]/75 transition-transform duration-300 ${
+        speaking ? "scale-[1.03]" : "scale-100"
+      } ${headMotionClass} ${avatar.ring}`}
+    >
+      <div
+        className={`absolute left-1/2 top-2 -translate-x-1/2 rounded-full ${avatar.hair} ${size === "large" ? "h-5 w-10" : "h-2 w-3.5"}`}
+      />
+      <div
+        className={`relative rounded-full border border-black/20 ${avatar.skin} ${face}`}
+      >
+        <div className="absolute left-1/2 top-[35%] flex -translate-x-1/2 items-center gap-2">
+          <span
+            className={`relative overflow-hidden rounded-full border border-black/10 bg-white transition-all duration-100 ${eyeWhite} ${
+              blinking ? "h-0.5" : size === "large" ? "h-3" : "h-1.5"
+            }`}
+          >
+            <span
+              className={`absolute left-1/2 top-1/2 -translate-y-1/2 rounded-full bg-[#1f2937] transition-transform duration-200 ${pupil} ${pupilOffsetClass}`}
+            />
+          </span>
+          <span
+            className={`relative overflow-hidden rounded-full border border-black/10 bg-white transition-all duration-100 ${eyeWhite} ${
+              blinking ? "h-0.5" : size === "large" ? "h-3" : "h-1.5"
+            }`}
+          >
+            <span
+              className={`absolute left-1/2 top-1/2 -translate-y-1/2 rounded-full bg-[#1f2937] transition-transform duration-200 ${pupil} ${pupilOffsetClass}`}
+            />
+          </span>
+        </div>
+        <div className="absolute left-1/2 top-[62%] -translate-x-1/2">
+          <span
+            className={`block ${mouth} rounded-full bg-[#7b3f3f] transition-all duration-200 ${
+              speaking
+                ? `${mouthClass} animate-pulse`
+                : `${size === "large" ? "h-1.5" : "h-0.5"}`
+            }`}
+          />
+        </div>
+      </div>
+      <div
+        className={`absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full ${avatar.shirt} ${shoulders}`}
+      />
+      {speaking && size === "large" && (
+        <div className="pointer-events-none absolute -bottom-6 left-1/2 flex -translate-x-1/2 items-end gap-1">
+          <span className="h-2 w-1 rounded-full bg-violet-300/80 animate-pulse" />
+          <span className="h-4 w-1 rounded-full bg-violet-300/80 animate-pulse [animation-delay:120ms]" />
+          <span className="h-3 w-1 rounded-full bg-violet-300/80 animate-pulse [animation-delay:240ms]" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function VoiceCoachSession({ mode }: VoiceCoachSessionProps) {
   return (
     <ConversationProvider>
@@ -186,6 +318,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [summary, setSummary] = useState<string | null>(null);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [showMessages, setShowMessages] = useState(false);
+  const [avatarBlinking, setAvatarBlinking] = useState(false);
+  const [avatarMouthLevel, setAvatarMouthLevel] = useState<0 | 1 | 2 | 3>(0);
+  const [avatarGaze, setAvatarGaze] = useState<"center" | "left" | "right">("center");
+  const [avatarHeadMotionClass, setAvatarHeadMotionClass] = useState("rotate-0 translate-y-0");
   const transcriptRef = useRef<string[]>([]);
   const startedAtRef = useRef<number>(0);
   const phaseRef = useRef<SessionPhase>("idle");
@@ -196,6 +332,32 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let blinkTimer: number | null = null;
+    let reopenTimer: number | null = null;
+
+    const scheduleBlink = () => {
+      const nextDelayMs = 2200 + Math.random() * 2600;
+      blinkTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        setAvatarBlinking(true);
+        reopenTimer = window.setTimeout(() => {
+          setAvatarBlinking(false);
+          scheduleBlink();
+        }, 140);
+      }, nextDelayMs);
+    };
+
+    scheduleBlink();
+
+    return () => {
+      cancelled = true;
+      if (blinkTimer !== null) window.clearTimeout(blinkTimer);
+      if (reopenTimer !== null) window.clearTimeout(reopenTimer);
+    };
+  }, []);
 
   const conversation = useConversation({
     onConnect: () => {
@@ -285,6 +447,60 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       setPhase("idle");
     },
   });
+
+  const avatarIsActive = phase === "active" || phase === "ending";
+  const avatarIsSpeaking = avatarIsActive && conversation.isSpeaking;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const scheduleGaze = () => {
+      const nextDelayMs = 900 + Math.random() * 1200;
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        const nextGaze = ["center", "left", "right"][
+          Math.floor(Math.random() * 3)
+        ] as "center" | "left" | "right";
+        setAvatarGaze(nextGaze);
+        scheduleGaze();
+      }, nextDelayMs);
+    };
+
+    scheduleGaze();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!avatarIsActive) {
+      setAvatarMouthLevel(0);
+      setAvatarHeadMotionClass("rotate-0 translate-y-0");
+      return;
+    }
+
+    let cancelled = false;
+    const listeningPoses = ["rotate-0 translate-y-0", "rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] translate-y-0"] as const;
+    const speakingPoses = ["rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] -translate-y-[1px]", "rotate-0 -translate-y-[1px]"] as const;
+
+    const interval = window.setInterval(() => {
+      if (cancelled) return;
+      const mouthFrame = avatarIsSpeaking
+        ? ([1, 2, 3][Math.floor(Math.random() * 3)] as 1 | 2 | 3)
+        : 0;
+      setAvatarMouthLevel(mouthFrame);
+
+      const poses = avatarIsSpeaking ? speakingPoses : listeningPoses;
+      setAvatarHeadMotionClass(poses[Math.floor(Math.random() * poses.length)]);
+    }, avatarIsSpeaking ? 140 : 620);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [avatarIsActive, avatarIsSpeaking]);
 
   const safeEndConversation = useCallback(() => {
     if (!sessionStartedRef.current) return;
@@ -539,6 +755,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       ? "Connecting"
       : "Disconnected";
   const modeSurface = MODE_SURFACE_STYLES[mode];
+  const coachAvatar = MODE_COACH_AVATAR[mode];
 
   return (
     <div className="relative overflow-hidden rounded-3xl p-[1px]">
@@ -629,7 +846,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
       <div className="relative mt-8 flex justify-center">
         <div
-          className={`flex h-32 w-32 items-center justify-center rounded-full border transition-all duration-300 ${
+          className={`flex h-36 w-36 items-center justify-center rounded-full border transition-all duration-300 ${
             isActive
               ? conversation.isSpeaking
                 ? "border-[#8b5cf6] bg-[#8b5cf6]/20 shadow-[0_0_45px_rgba(139,92,246,0.38)]"
@@ -637,19 +854,38 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
               : "border-white/10 bg-white/[0.04]"
           }`}
         >
-          {isActive ? (
-            <Mic className="h-11 w-11 text-[#8b5cf6]" />
-          ) : (
-            <MicOff className="h-11 w-11 text-[#6b7280]" />
-          )}
+          <div className="relative">
+            <CoachFace
+              avatar={coachAvatar}
+              speaking={avatarIsSpeaking}
+              blinking={avatarBlinking}
+              mouthLevel={avatarMouthLevel}
+              gaze={avatarGaze}
+              headMotionClass={avatarHeadMotionClass}
+              size="large"
+            />
+            <span
+              className={`absolute -right-1 -top-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                conversation.isSpeaking && isActive
+                  ? "border-violet-300/60 bg-violet-500/20 text-violet-100"
+                  : "border-white/20 bg-black/30 text-[#d4d4d8]"
+              }`}
+            >
+              AI
+            </span>
+          </div>
         </div>
         {isActive && (
           <span
             aria-hidden
-            className="absolute h-36 w-36 animate-ping rounded-full border border-[#8b5cf6]/30"
+            className="absolute h-40 w-40 animate-ping rounded-full border border-[#8b5cf6]/30"
           />
         )}
       </div>
+
+      <p className="mt-3 text-center text-sm text-[#d4d4d8]">
+        {coachAvatar.name} · {conversation.isSpeaking && isActive ? "speaking" : "listening"}
+      </p>
 
       <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
         <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[#9ca3af]">
@@ -726,10 +962,27 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
                         : "border-white/10 bg-[#0b0b0d]"
                     }`}
                   >
-                    <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
-                      {message.role}
-                    </p>
-                    <p className="mt-1 text-sm text-white">{message.text}</p>
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                          message.role === "agent"
+                            ? "border-[#8b5cf6]/45 bg-[#8b5cf6]/20 text-[#d8b4fe]"
+                            : "border-white/15 bg-white/10 text-white"
+                        }`}
+                      >
+                        {message.role === "agent" ? (
+                          <CoachFace avatar={coachAvatar} speaking={false} size="small" />
+                        ) : (
+                          <UserRound className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
+                          {message.role === "agent" ? coachAvatar.name : "You"}
+                        </p>
+                        <p className="mt-1 text-sm text-white">{message.text}</p>
+                      </div>
+                    </div>
                   </div>
                 ))
               )}
