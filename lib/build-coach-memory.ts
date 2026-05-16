@@ -1,4 +1,4 @@
-import { getSupabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 /** Keep dynamic variable payloads small for faster WebRTC signaling. */
@@ -61,16 +61,15 @@ export interface OpenHomework {
 }
 
 export async function fetchOpenHomework(
-  userName: string,
+  userId: string,
 ): Promise<OpenHomework[]> {
-  const supabase = getSupabase();
-  if (!supabase) return [];
+  const supabase = await createClient();
 
   try {
     const { data, error } = await supabase
       .from("action_points")
       .select("id, task, mode, created_at, points")
-      .eq("user_name", userName)
+      .eq("user_id", userId)
       .eq("completed", false)
       .order("created_at", { ascending: false })
       .limit(5);
@@ -97,36 +96,34 @@ export async function fetchOpenHomework(
 }
 
 export async function buildCoachMemory(
-  userName: string,
+  userId: string,
   mode: VoiceCoachMode,
 ): Promise<string> {
-  const supabase = getSupabase();
+  const supabase = await createClient();
   let memoryRow: {
     memory_blob: string | null;
     current_goal: string | null;
     difficulty: string | null;
   } | null = null;
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from("user_coach_memory")
-        .select("memory_blob, current_goal, difficulty")
-        .eq("user_name", userName)
-        .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from("user_coach_memory")
+      .select("memory_blob, current_goal, difficulty")
+      .eq("user_id", userId)
+      .maybeSingle();
 
-      if (error) {
-        console.error("[build-coach-memory] memory fetch:", error.message);
-      } else {
-        memoryRow = data;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[build-coach-memory] memory fetch:", message);
+    if (error) {
+      console.error("[build-coach-memory] memory fetch:", error.message);
+    } else {
+      memoryRow = data;
     }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[build-coach-memory] memory fetch:", message);
   }
 
-  const openHomework = await fetchOpenHomework(userName);
+  const openHomework = await fetchOpenHomework(userId);
   const baseBlob = memoryRow?.memory_blob?.trim() || DEFAULT_MEMORY;
   const focusLines = SESSION_FOCUS[mode].map((line) => `- ${line}`).join("\n");
 

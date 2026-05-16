@@ -5,7 +5,7 @@ import {
   getElevenLabsAgentId,
   getElevenLabsApiKey,
 } from "@/lib/elevenlabs-config";
-import { getUserNameFromHeader } from "@/lib/user-name";
+import { requireUser } from "@/lib/supabase/require-user";
 import { isVoiceCoachMode } from "@/lib/voice-coach-modes";
 import { getVoiceCoachConfigError } from "@/lib/voice-coach-env";
 import {
@@ -26,13 +26,13 @@ Current Goal:
 Build communication confidence through regular practice`;
 
 async function getMemoryWithTimeout(
-  userName: string,
+  userId: string,
   mode: Parameters<typeof buildCoachMemory>[1],
   timeoutMs = 3500,
 ): Promise<string> {
   try {
     return await Promise.race<string>([
-      buildCoachMemory(userName, mode),
+      buildCoachMemory(userId, mode),
       new Promise<string>((resolve) => {
         setTimeout(() => resolve(FALLBACK_MEMORY), timeoutMs);
       }),
@@ -46,14 +46,7 @@ async function getMemoryWithTimeout(
 export async function GET(request: NextRequest) {
   try {
     const mode = request.nextUrl.searchParams.get("mode");
-    const userName = getUserNameFromHeader(request);
-
-    if (!userName) {
-      return NextResponse.json(
-        { error: "user_name is required (x-user-name header)" },
-        { status: 400 },
-      );
-    }
+    const user = await requireUser();
 
     if (!mode || !isVoiceCoachMode(mode)) {
       return NextResponse.json(
@@ -70,7 +63,7 @@ export async function GET(request: NextRequest) {
     const apiKey = getElevenLabsApiKey()!;
     const agentId = getElevenLabsAgentId()!;
     const [memory, signed] = await Promise.all([
-      getMemoryWithTimeout(userName, mode),
+      getMemoryWithTimeout(user.id, mode),
       fetchElevenLabsSignedUrl(agentId, apiKey),
     ]);
 

@@ -1,9 +1,9 @@
-import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 import type { VoiceSessionSummary } from "@/lib/summarize-voice-session";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 export interface SaveVoiceSessionInput {
-  userName: string;
+  userId: string;
   mode: VoiceCoachMode;
   transcript: string;
   durationSeconds: number;
@@ -14,17 +14,12 @@ export interface SaveVoiceSessionInput {
 export async function saveVoiceSession(
   input: SaveVoiceSessionInput,
 ): Promise<{ sessionId: string | null; error?: string; skipped?: boolean }> {
-  const supabase = getSupabase();
-
-  if (!supabase) {
-    console.warn("[save-voice-session] Supabase not configured — session not persisted");
-    return { sessionId: null, skipped: true };
-  }
+  const supabase = await createClient();
 
   const { data: sessionRow, error: sessionError } = await supabase
     .from("sessions")
     .insert({
-      user_name: input.userName,
+      user_id: input.userId,
       topic: input.mode,
       feature: "voice_coach",
       mode: input.mode,
@@ -48,16 +43,16 @@ export async function saveVoiceSession(
   const [memoryResult, taskResult] = await Promise.allSettled([
     supabase.from("user_coach_memory").upsert(
       {
-        user_name: input.userName,
+        user_id: input.userId,
         memory_blob: input.summary.memoryBlob,
         current_goal: input.summary.currentGoal,
         difficulty: input.summary.difficulty,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: "user_name" },
+      { onConflict: "user_id" },
     ),
     supabase.from("action_points").insert({
-      user_name: input.userName,
+      user_id: input.userId,
       session_id: sessionId,
       mode: input.mode,
       task: input.summary.task,
@@ -86,5 +81,3 @@ export async function saveVoiceSession(
 
   return { sessionId };
 }
-
-export { isSupabaseConfigured };

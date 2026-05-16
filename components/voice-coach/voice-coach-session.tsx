@@ -15,12 +15,7 @@ import {
   formatVoiceCoachConnectionError,
   isNegotiationTimeout,
 } from "@/lib/voice-coach-connection-errors";
-import {
-  getOrCreateStoredUserName,
-  getStoredUserName,
-  prepareMicrophoneForVoiceSession,
-  voiceCoachHeaders,
-} from "@/lib/voice-coach-client";
+import { prepareMicrophoneForVoiceSession } from "@/lib/voice-coach-microphone";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
@@ -313,6 +308,10 @@ function normalizeTranscriptLines(transcript: string): ConversationMessage[] {
   });
 }
 
+function nowTimestamp(): number {
+  return Date.now();
+}
+
 function HomeworkCard({ task, mode }: { task: string; mode: VoiceCoachMode }) {
   return (
     <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
@@ -487,7 +486,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, []);
 
   const loadHistory = useCallback(async () => {
-    const userName = getOrCreateStoredUserName();
     const loadGeneration = ++historyLoadGenerationRef.current;
 
     setHistoryLoading(true);
@@ -496,9 +494,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     const isStale = () => loadGeneration !== historyLoadGenerationRef.current;
 
     try {
-      const response = await fetch("/api/voice-coach/history", {
-        headers: { "x-user-name": userName },
-      });
+      const response = await fetch("/api/voice-coach/history");
 
       if (isStale()) return;
 
@@ -958,6 +954,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, []);
 
   useEffect(() => {
+    if (!avatarIsActive) {
+      return;
+    }
+
     let cancelled = false;
     const listeningPoses = ["rotate-0 translate-y-0", "rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] translate-y-0"] as const;
     const speakingPoses = ["rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] -translate-y-[1px]", "rotate-0 -translate-y-[1px]"] as const;
@@ -1015,7 +1015,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     const startAttemptId = ++startAttemptCounterRef.current;
     activeStartAttemptRef.current = startAttemptId;
 
-    getOrCreateStoredUserName();
     setError(null);
     setNotice(null);
     setConnectHint(null);
@@ -1053,7 +1052,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
-        { headers: voiceCoachHeaders() },
       );
 
       const data = await parseApiJson<{
@@ -1089,7 +1087,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         setConnectHint("Connecting via websocket…");
       }
 
-      startedAtRef.current = Date.now();
+      startedAtRef.current = nowTimestamp();
 
       const sessionOptions = {
         dynamicVariables: {
@@ -1165,12 +1163,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         isStartingRef.current = false;
       }
     }
-  }, [endSdkSessionIfOpen, mode, startSdkSession]);
+  }, [conversation, endSdkSessionIfOpen, mode, startSdkSession]);
 
   const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
-    const userName = getStoredUserName() ?? getOrCreateStoredUserName();
-    if (!userName) return;
-
     const conversationId =
       conversationIdRef.current ?? storedConversationId ?? getConversationId();
 
@@ -1216,7 +1211,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     }
 
     const durationSeconds = Math.round(
-      (Date.now() - startedAtRef.current) / 1000,
+      (nowTimestamp() - startedAtRef.current) / 1000,
     );
     const transcript =
       transcriptRef.current.join("\n") ||
@@ -1227,11 +1222,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...voiceCoachHeaders(),
         },
         body: JSON.stringify({
           mode,
-          user_name: userName,
           transcript,
           duration_seconds: durationSeconds,
           conversation_id: conversationId,
