@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { COACH_MODE_LINKS } from "@/lib/voice-coach-modes";
+
 const COACHES = [
   {
     initial: "M",
@@ -7,8 +10,10 @@ const COACHES = [
     glow: "shadow-[0_0_40px_rgba(59,130,246,0.15)]",
     border: "border-blue-500/20",
     avatar: "bg-blue-500",
+    href: "/voice-coach?mode=Interview",
     description:
       "Strict FAANG recruiter. Will follow up on every weak answer. No softballs.",
+    linkable: true,
   },
   {
     initial: "A",
@@ -18,8 +23,10 @@ const COACHES = [
     glow: "shadow-[0_0_40px_rgba(239,68,68,0.15)]",
     border: "border-red-500/20",
     avatar: "bg-red-500",
+    href: "/voice-coach?mode=Debate",
     description:
       "Relentless. Argues the opposite side. Exposes every gap in your logic.",
+    linkable: true,
   },
   {
     initial: "O",
@@ -29,8 +36,10 @@ const COACHES = [
     glow: "shadow-[0_0_40px_rgba(34,197,94,0.15)]",
     border: "border-green-500/20",
     avatar: "bg-green-500",
+    href: COACH_MODE_LINKS.olivia.href,
     description:
       "Warm and encouraging, but will push you to be clearer.",
+    linkable: true,
   },
   {
     initial: "P",
@@ -40,7 +49,9 @@ const COACHES = [
     glow: "shadow-[0_0_40px_rgba(139,92,246,0.2)]",
     border: "border-[#8b5cf6]/30",
     avatar: "bg-[#8b5cf6]",
+    href: "/speech-eval",
     description: "Three judges. Three voices. One composite score.",
+    linkable: false,
   },
 ] as const;
 
@@ -72,26 +83,52 @@ export function CoachesSection() {
               border,
               avatar,
               description,
-            }) => (
-              <div
-                key={name}
-                className={`flex flex-col rounded-2xl border ${border} bg-[#111114] p-6 ${glow}`}
-              >
-                <div
-                  className={`flex h-12 w-12 items-center justify-center rounded-full ${avatar} text-lg font-bold text-white`}
-                >
-                  {initial}
+              href,
+              linkable,
+            }) => {
+              const inner = (
+                <>
+                  <div
+                    className={`flex h-12 w-12 items-center justify-center rounded-full ${avatar} text-lg font-bold text-white`}
+                  >
+                    {initial}
+                  </div>
+                  <h3 className="mt-4 text-lg font-bold text-white">{name}</h3>
+                  <p className={`mt-1 text-sm font-medium ${roleColor}`}>{role}</p>
+                  <p className="mt-3 flex-1 text-sm leading-relaxed text-[#9ca3af]">
+                    {description}
+                  </p>
+                  {linkable && (
+                    <p className="mt-4 text-xs font-semibold text-[#8b5cf6]">
+                      Start practicing →
+                    </p>
+                  )}
+                </>
+              );
+
+              const className = `flex h-full flex-col rounded-2xl border ${border} bg-[#111114] p-6 ${glow} ${
+                linkable
+                  ? "transition-transform hover:scale-[1.02] hover:border-[#8b5cf6]/40"
+                  : ""
+              }`;
+
+              if (linkable) {
+                return (
+                  <Link key={name} href={href} className={className}>
+                    {inner}
+                  </Link>
+                );
+              }
+
+              return (
+                <div key={name} className={className}>
+                  {inner}
                 </div>
-                <h3 className="mt-4 text-lg font-bold text-white">{name}</h3>
-                <p className={`mt-1 text-sm font-medium ${roleColor}`}>{role}</p>
-                <p className="mt-3 flex-1 text-sm leading-relaxed text-[#9ca3af]">
-                  {description}
-                </p>
-              </div>
-            ),
+              );
+            },
           )}
         </div>
-      </div>
+        </div>
     </section>
   );
 }

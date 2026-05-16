@@ -4,14 +4,15 @@ import LoginPage from '@/components/auth/login-page'
 
 export const metadata: Metadata = {
   title: 'Log in — Podium AI',
-  description: 'Sign in to Podium AI and continue your voice coaching sessions.',
+  description:
+    'Sign in to Podium AI and continue your voice coaching sessions.',
 }
 
 export default function Page() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-[#050505] text-sm text-[#9ca3af]">
+        <div className="flex min-h-screen items-center justify-center bg-[#050505] text-[#9ca3af]">
           Loading…
         </div>
       }

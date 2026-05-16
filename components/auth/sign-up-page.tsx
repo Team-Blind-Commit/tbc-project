@@ -1,24 +1,38 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { AuthAlert } from '@/components/auth/auth-alert'
 import { AuthDivider } from '@/components/auth/auth-divider'
 import { AuthFormPanel } from '@/components/auth/auth-form-panel'
 import { AuthShell } from '@/components/auth/auth-shell'
 import { GoogleSignInButton } from '@/components/auth/google-sign-in-button'
+import {
+  buildLoginHref,
+  buildPostLoginPath,
+  persistAuthRedirect,
+} from '@/lib/auth-redirect'
 import { saveProfileViaApi } from '@/lib/profile-api'
 import { createClient } from '@/lib/supabase/client'
+import { setStoredUserName } from '@/lib/voice-coach-client'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60'
 
 export default function SignUpPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const nextPath = searchParams.get('next') ?? '/dashboard'
+  const modeParam = searchParams.get('mode')
+
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [formMessage, setFormMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    persistAuthRedirect(nextPath, modeParam)
+  }, [nextPath, modeParam])
 
   async function handleGetStarted(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -53,7 +67,9 @@ export default function SignUpPage() {
       email,
       password,
       options: {
-        data: { username },
+        data: {
+          username,
+        },
       },
     })
 
@@ -85,7 +101,10 @@ export default function SignUpPage() {
       return
     }
 
-    router.push('/dashboard')
+    setStoredUserName(username)
+
+    const destination = buildPostLoginPath(nextPath, modeParam)
+    router.push(destination)
     router.refresh()
   }
 
@@ -96,7 +115,7 @@ export default function SignUpPage() {
         <p className="mt-2 text-sm text-[#9ca3af]">
           Already have an account?{' '}
           <Link
-            href="/login"
+            href={buildLoginHref(nextPath, modeParam ?? undefined)}
             className="text-[#7c3aed] underline decoration-[#7c3aed]/60 underline-offset-2"
           >
             Log in
