@@ -6,6 +6,7 @@ interface SessionRow {
   id: string;
   mode: string | null;
   summary: string | null;
+  action_points: { task: string | null }[] | null;
   transcript: string | null;
   created_at: string | null;
   duration_seconds: number | null;
@@ -16,6 +17,7 @@ interface VoiceCoachHistoryItem {
   title: string;
   mode: string;
   summary: string | null;
+  task: string | null;
   transcript: string;
   createdAt: string | null;
   durationSeconds: number | null;
@@ -46,11 +48,13 @@ function buildSessionTitle(session: SessionRow): string {
 }
 
 function mapHistoryItem(session: SessionRow): VoiceCoachHistoryItem {
+  const latestTask = session.action_points?.[0]?.task?.trim() ?? null;
   return {
     id: session.id,
     title: buildSessionTitle(session),
     mode: session.mode?.trim() || "Voice Coach",
     summary: session.summary,
+    task: latestTask || null,
     transcript: session.transcript?.trim() ?? "",
     createdAt: session.created_at,
     durationSeconds: session.duration_seconds,
@@ -75,7 +79,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("sessions")
       .select(
-        "id, mode, summary, transcript, created_at, duration_seconds, feature, user_name",
+        "id, mode, summary, transcript, created_at, duration_seconds, feature, user_name, action_points(task, created_at)",
       )
       .eq("user_name", userName)
       .eq("feature", "voice_coach")

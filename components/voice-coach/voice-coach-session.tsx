@@ -387,6 +387,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [connectHint, setConnectHint] = useState<string | null>(null);
   const [task, setTask] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [autoEndedByVoice, setAutoEndedByVoice] = useState(false);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [historyItems, setHistoryItems] = useState<VoiceCoachHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -468,6 +469,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       title: `Current: ${title}`,
       mode,
       summary: null,
+      task: null,
       transcript,
       createdAt: null,
       durationSeconds: null,
@@ -719,6 +721,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     setPhase("loading");
     setTask(null);
     setSummary(null);
+    setAutoEndedByVoice(false);
     setMessages([]);
     transcriptRef.current = [];
 
@@ -837,6 +840,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     pendingConnectRef.current = null;
     negotiationRetriesRef.current = 0;
     setConnectHint(null);
+    setAutoEndedByVoice(triggeredByVoiceIntent);
     autoEndingRef.current = true;
     setPhase("ending");
     const conversationId = getConversationId();
@@ -929,6 +933,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
               <Sparkles className="h-3.5 w-3.5" />
               Session complete
             </p>
+            {autoEndedByVoice && (
+              <p className="mt-2 inline-flex items-center gap-2 rounded-full border border-blue-500/35 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-200">
+                Auto-ended by voice command
+              </p>
+            )}
             <h2 className="mt-3 text-2xl font-bold text-white">
               Great work today in {mode}
             </h2>
@@ -940,6 +949,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
                 setPhase("idle");
                 setTask(null);
                 setSummary(null);
+                setAutoEndedByVoice(false);
               }}
             />
           </div>
@@ -1180,10 +1190,13 @@ function HistorySidebar({
 }) {
   return (
     <aside className="overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f]">
-      <div className="border-b border-white/10 px-4 py-3">
+      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
           Chat History
         </p>
+        <span className="rounded-full border border-[#8b5cf6]/35 bg-[#8b5cf6]/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#d8b4fe]">
+          New Chat
+        </span>
       </div>
       <div className="max-h-[74vh] space-y-2 overflow-y-auto p-3">
         {historyLoading && (
@@ -1208,11 +1221,17 @@ function HistorySidebar({
             onClick={() => onSelect(item.id)}
             className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
               selectedHistoryId === item.id
-                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/15"
+                ? "border-[#8b5cf6]/55 bg-[#8b5cf6]/20 shadow-[0_0_0_1px_rgba(139,92,246,0.35)]"
                 : "border-white/10 bg-[#111114] hover:bg-white/[0.04]"
             }`}
           >
-            <p className="text-xs text-[#9ca3af]">{item.mode}</p>
+            <p
+              className={`text-xs ${
+                selectedHistoryId === item.id ? "text-[#c4b5fd]" : "text-[#9ca3af]"
+              }`}
+            >
+              {item.mode}
+            </p>
             <p className="mt-1 text-sm font-medium text-white">
               {formatConversationTitle(item, index)}
             </p>
@@ -1246,6 +1265,11 @@ function HistoryContent({
         </p>
         {selectedHistoryItem?.summary && (
           <p className="mt-1 text-xs text-[#9ca3af]">{selectedHistoryItem.summary}</p>
+        )}
+        {selectedHistoryItem?.task && (
+          <p className="mt-2 inline-flex max-w-full items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">
+            Task: {selectedHistoryItem.task}
+          </p>
         )}
       </div>
       <div className="max-h-[42vh] space-y-3 overflow-y-auto px-5 py-4">
