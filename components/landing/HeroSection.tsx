@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 function VoiceWave() {
   const bars = [0.35, 0.55, 0.85, 1, 0.75, 0.5, 0.9, 0.65, 0.4, 0.7, 0.95, 0.6];
   return (
@@ -44,13 +46,12 @@ export function HeroSection() {
         </p>
 
         <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-          <a
-            href="#cta"
-            onClick={(e) => scrollToSection(e, "#cta")}
+          <Link
+            href="/login"
             className="w-full rounded-xl bg-[#8b5cf6] px-8 py-3.5 text-center text-base font-semibold text-white transition-colors hover:bg-[#7c3aed] sm:w-auto"
           >
             Start Practicing Free
-          </a>
+          </Link>
           <a
             href="#the-panel"
             onClick={(e) => scrollToSection(e, "#the-panel")}

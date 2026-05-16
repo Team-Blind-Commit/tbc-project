@@ -1,9 +1,4 @@
-"use client";
-
-function scrollToCta(e: React.MouseEvent<HTMLAnchorElement>) {
-  e.preventDefault();
-  document.querySelector("#cta")?.scrollIntoView({ behavior: "smooth" });
-}
+import Link from "next/link";
 
 export function CtaSection() {
   return (
@@ -24,13 +19,12 @@ export function CtaSection() {
             Podium AI coaches you with real-time voice AI — so you walk in
             prepared, confident, and ready.
           </p>
-          <a
-            href="#cta"
-            onClick={scrollToCta}
+          <Link
+            href="/login"
             className="mt-10 inline-block rounded-xl bg-[#8b5cf6] px-10 py-4 text-lg font-semibold text-white transition-colors hover:bg-[#7c3aed]"
           >
             Start Practicing Free
-          </a>
+          </Link>
           <p className="mt-4 text-sm text-[#71717a]">
             No credit card. No download. Just speak.
           </p>
