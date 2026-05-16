@@ -1,7 +1,9 @@
-import Link from "next/link";
-import { ArrowRight, Mic, Users } from "lucide-react";
+"use client";
 
-const COACH_MODES = ["Interview", "Debate", "Presentation", "Impromptu"] as const;
+import Link from "next/link";
+import { useState } from "react";
+import { ArrowRight, Mic, Users } from "lucide-react";
+import { VOICE_COACH_MODES, type VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 const JUDGES = [
   "Grace — language",
@@ -10,6 +12,10 @@ const JUDGES = [
 ] as const;
 
 export function PracticeCards() {
+  const [selectedMode, setSelectedMode] = useState<VoiceCoachMode>("Interview");
+
+  const voiceCoachHref = `/voice-coach?mode=${encodeURIComponent(selectedMode)}`;
+
   return (
     <section>
       <h2 className="text-lg font-bold text-white">Choose your practice</h2>
@@ -27,17 +33,23 @@ export function PracticeCards() {
             answers, and evaluate you — just like a real session.
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
-            {COACH_MODES.map((mode) => (
-              <span
+            {VOICE_COACH_MODES.map((mode) => (
+              <button
                 key={mode}
-                className="rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1 text-xs text-[#d4d4d8]"
+                type="button"
+                onClick={() => setSelectedMode(mode)}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                  selectedMode === mode
+                    ? "border-[#8b5cf6] bg-[#8b5cf6]/20 text-white"
+                    : "border-white/[0.08] bg-white/[0.04] text-[#d4d4d8] hover:border-white/20"
+                }`}
               >
                 {mode}
-              </span>
+              </button>
             ))}
           </div>
           <Link
-            href="/voice-coach"
+            href={voiceCoachHref}
             className="mt-6 inline-flex w-fit items-center gap-2 rounded-xl border border-[#8b5cf6]/50 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#8b5cf6]/15"
           >
             Start Session

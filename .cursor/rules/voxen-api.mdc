@@ -121,6 +121,7 @@ These live in `.env.local` only — never commit this file.
 
 ```env
 ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_COACH_AGENT_ID=agent_9301krr9qj98fme943ab12056v1z
 OPENAI_API_KEY=
 GROQ_API_KEY=
 NEXT_PUBLIC_SUPABASE_URL=

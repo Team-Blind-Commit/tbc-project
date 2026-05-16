@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { buildLoginHref } from "@/lib/auth-redirect";
 
 export function CtaSection() {
   return (
@@ -20,7 +21,7 @@ export function CtaSection() {
             prepared, confident, and ready.
           </p>
           <Link
-            href="/login"
+            href={buildLoginHref('/voice-coach', 'Interview')}
             className="mt-10 inline-block rounded-xl bg-[#8b5cf6] px-10 py-4 text-lg font-semibold text-white transition-colors hover:bg-[#7c3aed]"
           >
             Start Practicing Free

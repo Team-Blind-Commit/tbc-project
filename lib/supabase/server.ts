@@ -1,22 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getSupabasePublicEnv } from "@/lib/supabase/env";
 
-function getSupabaseEnv() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anonKey) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    );
-  }
-
-  return { url, anonKey };
-}
-
-export async function createSupabaseServer() {
-  const { url, anonKey } = getSupabaseEnv();
+export async function createClient() {
   const cookieStore = await cookies();
+  const { url, anonKey } = getSupabasePublicEnv();
 
   return createServerClient(url, anonKey, {
     cookies: {
@@ -25,13 +13,15 @@ export async function createSupabaseServer() {
       },
       setAll(cookiesToSet) {
         try {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
-          });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options),
+          );
         } catch {
-          // setAll from a Server Component — middleware should refresh the session
+          // setAll from Server Component — session refresh handled in proxy.
         }
       },
     },
   });
 }
+
+export const createSupabaseServer = createClient;

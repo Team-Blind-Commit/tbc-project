@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { buildLoginHref } from "@/lib/auth-redirect";
 
 function VoiceWave() {
   const bars = [0.35, 0.55, 0.85, 1, 0.75, 0.5, 0.9, 0.65, 0.4, 0.7, 0.95, 0.6];
@@ -47,7 +48,7 @@ export function HeroSection() {
 
         <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <Link
-            href="/login"
+            href={buildLoginHref('/voice-coach', 'Interview')}
             className="w-full rounded-xl bg-[#8b5cf6] px-8 py-3.5 text-center text-base font-semibold text-white transition-colors hover:bg-[#7c3aed] sm:w-auto"
           >
             Start Practicing Free
