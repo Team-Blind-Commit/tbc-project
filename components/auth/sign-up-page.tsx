@@ -1,12 +1,17 @@
 "use client";
 
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect } from "react";
 import { Check, Mic } from "lucide-react";
+
+import { createClient } from "@/lib/supabase/client";
+import { createProfile } from "@/lib/profiles";
+
 import {
   buildPostLoginPath,
   persistAuthRedirect,
 } from "@/lib/auth-redirect";
+
 import { setStoredUserName } from "@/lib/voice-coach-client";
 
 const FEATURES = [
@@ -41,31 +46,127 @@ function GoogleIcon() {
 export default function SignUpPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+
   const nextPath = searchParams.get("next") ?? "/dashboard";
   const modeParam = searchParams.get("mode");
+
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formMessage, setFormMessage] = useState<string | null>(null);
 
   useEffect(() => {
     persistAuthRedirect(nextPath, modeParam);
   }, [nextPath, modeParam]);
 
-  function completeSignIn(name: string) {
-    const trimmed = name.trim();
-    if (trimmed) {
-      setStoredUserName(trimmed);
-    }
-    const destination = buildPostLoginPath(nextPath, modeParam);
-    router.push(destination);
-  }
-
-  function handleGetStarted(e: FormEvent<HTMLFormElement>) {
+  async function handleGetStarted(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+
+    setFormError(null);
+    setFormMessage(null);
+    setIsSubmitting(true);
+
     const form = e.currentTarget;
-    const nameInput = form.elements.namedItem("fullName") as HTMLInputElement;
-    completeSignIn(nameInput?.value ?? "Guest");
+
+    const username = (
+      form.elements.namedItem("username") as HTMLInputElement
+    ).value.trim();
+
+    const email = (
+      form.elements.namedItem("email") as HTMLInputElement
+    ).value.trim();
+
+    const password = (
+      form.elements.namedItem("password") as HTMLInputElement
+    ).value;
+
+    if (!username || !email || !password) {
+      setFormError("Please fill in all fields.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setFormError("Password must be at least 6 characters.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const supabase = createClient();
+
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username,
+        },
+      },
+    });
+
+    if (signUpError) {
+      console.error("[signup]", signUpError);
+
+      setFormError(signUpError.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (!data.user) {
+      setFormError("User creation failed.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const profileResult = await createProfile(
+      supabase,
+      data.user.id,
+      username
+    );
+
+    if (!profileResult.ok) {
+      console.error("[profile-create]", profileResult.message);
+
+      setFormError(profileResult.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    setStoredUserName(username);
+
+    if (data.session) {
+      const destination = buildPostLoginPath(nextPath, modeParam);
+
+      router.push(destination);
+      router.refresh();
+      return;
+    }
+
+    setFormMessage(
+      "Account created successfully. Please check your email verification link."
+    );
+
+    setIsSubmitting(false);
   }
 
-  function handleGoogleSignIn() {
-    completeSignIn("Guest");
+  async function handleGoogleSignIn() {
+    setIsGoogleLoading(true);
+
+    const supabase = createClient();
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      console.error("[google-auth]", error);
+
+      setFormError(error.message);
+      setIsGoogleLoading(false);
+    }
   }
 
   return (
@@ -82,9 +183,11 @@ export default function SignUpPage() {
               strokeWidth={1.75}
               aria-hidden
             />
+
             <h1 className="mt-6 text-[32px] font-bold leading-tight text-white">
               Podium AI
             </h1>
+
             <p className="mt-2 text-[#9ca3af]">
               Train Your Voice. Own The Room.
             </p>
@@ -96,6 +199,7 @@ export default function SignUpPage() {
                     className="mt-0.5 h-5 w-5 shrink-0 text-[#7c3aed]"
                     strokeWidth={2.5}
                   />
+
                   <span className="text-sm leading-relaxed text-[#d4d4d8]">
                     {text}
                   </span>
@@ -106,38 +210,62 @@ export default function SignUpPage() {
         </div>
 
         <p className="mt-8 text-center text-sm italic text-[#71717a] lg:mt-0 lg:text-left">
-          &ldquo;The best speakers weren&apos;t born that way. They practiced.&rdquo;
+          &ldquo;The best speakers weren&apos;t born that way. They
+          practiced.&rdquo;
         </p>
       </aside>
 
       {/* Right — form */}
       <main className="flex flex-1 items-center justify-center px-6 py-10 lg:w-1/2 lg:px-12">
         <div className="w-full max-w-md rounded-xl border border-white/[0.06] bg-[#13131a] p-8 sm:p-10">
-          <h2 className="text-2xl font-bold text-white">Create your account</h2>
+          <h2 className="text-2xl font-bold text-white">
+            Create your account
+          </h2>
+
           <p className="mt-2 text-sm text-[#9ca3af]">
             Already have an account?{" "}
             <a
-              href="#"
+              href="/login"
               className="text-[#7c3aed] underline decoration-[#7c3aed]/60 underline-offset-2"
-              onClick={(e) => e.preventDefault()}
             >
               Log in
             </a>
           </p>
 
-          <form onSubmit={handleGetStarted} className="mt-8 space-y-5">
+          {formError ? (
+            <p
+              role="alert"
+              className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+            >
+              {formError}
+            </p>
+          ) : null}
+
+          {formMessage ? (
+            <p className="mt-6 rounded-lg border border-[#7c3aed]/30 bg-[#7c3aed]/10 px-4 py-3 text-sm text-[#c4b5fd]">
+              {formMessage}
+            </p>
+          ) : null}
+
+          <form
+            method="post"
+            onSubmit={handleGetStarted}
+            className="mt-8 space-y-5"
+          >
             <div>
-              <label htmlFor="full-name" className="sr-only">
-                Full Name
+              <label htmlFor="username" className="sr-only">
+                Username
               </label>
+
               <input
-                id="full-name"
-                name="fullName"
+                id="username"
+                name="username"
                 type="text"
-                autoComplete="name"
-                placeholder="Your name"
+                autoComplete="username"
                 required
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                disabled={isSubmitting}
+                placeholder="Username"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
@@ -145,13 +273,16 @@ export default function SignUpPage() {
               <label htmlFor="email" className="sr-only">
                 Email
               </label>
+
               <input
                 id="email"
                 name="email"
                 type="email"
                 autoComplete="email"
+                required
+                disabled={isSubmitting}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
@@ -159,27 +290,33 @@ export default function SignUpPage() {
               <label htmlFor="password" className="sr-only">
                 Password
               </label>
+
               <input
                 id="password"
                 name="password"
                 type="password"
                 autoComplete="new-password"
+                required
+                minLength={6}
+                disabled={isSubmitting}
                 placeholder="Create a password"
-                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
+                className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed] disabled:opacity-60"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full rounded-[10px] bg-[#7c3aed] py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#6d28d9]"
+              disabled={isSubmitting || isGoogleLoading}
+              className="w-full rounded-[10px] bg-[#7c3aed] py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Get Started
+              {isSubmitting ? "Creating account…" : "Get Started"}
             </button>
 
             <div className="relative py-2">
               <div className="absolute inset-0 flex items-center" aria-hidden>
                 <div className="w-full border-t border-white/[0.08]" />
               </div>
+
               <p className="relative text-center text-xs text-[#71717a]">
                 <span className="bg-[#13131a] px-3">or</span>
               </p>
@@ -188,10 +325,14 @@ export default function SignUpPage() {
             <button
               type="button"
               onClick={handleGoogleSignIn}
-              className="flex w-full items-center justify-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#1a1a24] py-3.5 text-sm font-medium text-white transition-colors hover:border-white/[0.12] hover:bg-[#22222c]"
+              disabled={isGoogleLoading}
+              className="flex w-full items-center justify-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#1a1a24] py-3.5 text-sm font-medium text-white transition-colors hover:border-white/[0.12] hover:bg-[#22222c] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <GoogleIcon />
-              Continue with Google
+
+              {isGoogleLoading
+                ? "Redirecting…"
+                : "Continue with Google"}
             </button>
           </form>
 
