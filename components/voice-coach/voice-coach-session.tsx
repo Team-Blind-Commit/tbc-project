@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Link from "next/link";
 import {
+  MessageSquareText,
   Mic,
   Sparkles,
   Square,
@@ -53,6 +54,29 @@ interface PendingConnect {
 
 interface VoiceCoachSessionProps {
   mode: VoiceCoachMode;
+}
+
+function getErrorContextText(context: unknown): string {
+  if (context instanceof Error) return `${context.name} ${context.message}`;
+  if (typeof context === "string") return context;
+  try {
+    return JSON.stringify(context ?? "");
+  } catch {
+    return String(context ?? "");
+  }
+}
+
+function isRetryableStartupFailure(message: string, context?: unknown): boolean {
+  const combined = `${message} ${getErrorContextText(context)}`.toLowerCase();
+  return (
+    isNegotiationTimeout(message, context) ||
+    combined.includes("v1 rtc path not found") ||
+    combined.includes("/rtc/v1/validate") ||
+    combined.includes("unknown datachannel error") ||
+    combined.includes("websocket") ||
+    combined.includes("closed before session start") ||
+    combined.includes("did not complete")
+  );
 }
 
 const MODE_SURFACE_STYLES: Record<
@@ -209,20 +233,6 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   }
 
   return { role, text: text.trim(), timestamp: Date.now() };
-}
-
-function isSessionEndIntent(text: string): boolean {
-  const normalized = text.toLowerCase();
-  const patterns = [
-    /\blet'?s end (this|the)?\s*session\b/,
-    /\bend (this|the)?\s*session\b/,
-    /\bstop (this|the)?\s*session\b/,
-    /\bfinish (this|the)?\s*session\b/,
-    /\bthat'?s all\b/,
-    /\bwe are done\b/,
-    /\bi am done\b/,
-  ];
-  return patterns.some((pattern) => pattern.test(normalized));
 }
 
 function summarizeMessageTitle(text: string): string {
@@ -393,15 +403,23 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [showMessages, setShowMessages] = useState(false);
   const [avatarBlinking, setAvatarBlinking] = useState(false);
   const [avatarMouthLevel, setAvatarMouthLevel] = useState<0 | 1 | 2 | 3>(0);
   const [avatarGaze, setAvatarGaze] = useState<"center" | "left" | "right">("center");
   const [avatarHeadMotionClass, setAvatarHeadMotionClass] = useState("rotate-0 translate-y-0");
   const transcriptRef = useRef<string[]>([]);
   const startedAtRef = useRef<number>(0);
+  const activeConnectedAtRef = useRef<number>(0);
   const phaseRef = useRef<SessionPhase>("idle");
   const pendingConnectRef = useRef<PendingConnect | null>(null);
   const negotiationRetriesRef = useRef(0);
+  const loadingPublicRetryRef = useRef(false);
+  const loadingSawNonDisconnectedStatusRef = useRef(false);
+  const loadingFailureHandledRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const startAttemptCounterRef = useRef(0);
+  const activeStartAttemptRef = useRef(0);
   const sessionStartedRef = useRef(false);
   const autoEndingRef = useRef(false);
 
@@ -532,11 +550,34 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     };
   }, []);
 
+  const handleFallbackStartFailure = useCallback((retryErr: unknown) => {
+    loadingFailureHandledRef.current = true;
+    pendingConnectRef.current = null;
+    negotiationRetriesRef.current = 0;
+    sessionStartedRef.current = false;
+    loadingPublicRetryRef.current = false;
+    setConnectHint(null);
+    setNotice(null);
+    setError(
+      formatVoiceCoachConnectionError(
+        retryErr instanceof Error
+          ? retryErr.message
+          : "Public fallback connection failed",
+        retryErr,
+      ),
+    );
+    phaseRef.current = "idle";
+    setPhase("idle");
+  }, []);
+
   const conversation = useConversation({
     onConnect: () => {
       negotiationRetriesRef.current = 0;
       pendingConnectRef.current = null;
       sessionStartedRef.current = true;
+      loadingFailureHandledRef.current = false;
+      loadingSawNonDisconnectedStatusRef.current = false;
+      activeConnectedAtRef.current = Date.now();
       setConnectHint(null);
       phaseRef.current = "active";
       setPhase("active");
@@ -544,6 +585,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     },
     onDisconnect: () => {
       sessionStartedRef.current = false;
+      if (phaseRef.current === "loading") {
+        // During loading, disconnect events can be transient while handshake settles.
+        // Let startup pipeline / timeout set the final state deterministically.
+        return;
+      }
       setPhase((current) => {
         if (current === "active") {
           phaseRef.current = "idle";
@@ -557,18 +603,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       if (normalized) {
         setMessages((current) => [...current, normalized]);
         transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
-        if (
-          normalized.role === "user" &&
-          phaseRef.current === "active" &&
-          !autoEndingRef.current &&
-          isSessionEndIntent(normalized.text)
-        ) {
-          autoEndingRef.current = true;
-          setNotice("Ending session now — saving your task and chat history...");
-          window.setTimeout(() => {
-            void endSession(true);
-          }, 0);
-        }
         return;
       }
 
@@ -585,53 +619,75 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     onError: (message, context) => {
       console.error("[voice-coach] conversation error:", message, context);
 
+      const pending = pendingConnectRef.current;
       if (
         phaseRef.current === "loading" &&
-        isNegotiationTimeout(message, context) &&
-        negotiationRetriesRef.current < 1 &&
-        pendingConnectRef.current
+        pending?.authMode === "signed" &&
+        pending.agentId &&
+        !loadingPublicRetryRef.current &&
+        isRetryableStartupFailure(message, context)
       ) {
-        negotiationRetriesRef.current += 1;
-        setNotice("Connection timed out — retrying once…");
-        if (sessionStartedRef.current) {
-          try {
-            conversation.endSession();
-          } catch (err) {
-            console.warn("[voice-coach] endSession skipped:", err);
-          } finally {
-            sessionStartedRef.current = false;
-          }
+        loadingPublicRetryRef.current = true;
+        pendingConnectRef.current = {
+          authMode: "public",
+          agentId: pending.agentId,
+          sessionOptions: pending.sessionOptions,
+        };
+        setConnectHint(
+          "Signed handshake failed. Retrying with public agent connection…",
+        );
+        try {
+          void conversation.startSession({
+            agentId: pending.agentId,
+            connectionType: "websocket",
+            ...pending.sessionOptions,
+          });
+        } catch (retryErr) {
+          handleFallbackStartFailure(retryErr);
         }
-        const pending = pendingConnectRef.current;
-
-        window.setTimeout(() => {
-          if (phaseRef.current !== "loading" || !pendingConnectRef.current) {
-            return;
-          }
-
-          if (pending.authMode === "signed" && pending.signedUrl) {
-            void conversation.startSession({
-              signedUrl: pending.signedUrl,
-              ...pending.sessionOptions,
-            });
-          } else if (pending.authMode === "public" && pending.agentId) {
-            void conversation.startSession({
-              agentId: pending.agentId,
-              ...pending.sessionOptions,
-            });
-          }
-        }, 1500);
         return;
       }
 
+      loadingFailureHandledRef.current = true;
       pendingConnectRef.current = null;
       negotiationRetriesRef.current = 0;
+      sessionStartedRef.current = false;
+      loadingPublicRetryRef.current = false;
       setConnectHint(null);
       setError(formatVoiceCoachConnectionError(message, context));
       phaseRef.current = "idle";
       setPhase("idle");
     },
   });
+
+  useEffect(() => {
+    if (phase !== "loading") return;
+
+    const timeoutMs = 25_000;
+    const timer = window.setTimeout(() => {
+      if (phaseRef.current !== "loading") return;
+
+      pendingConnectRef.current = null;
+      negotiationRetriesRef.current = 0;
+      sessionStartedRef.current = false;
+      setConnectHint(null);
+      setNotice(null);
+      setError(
+        formatVoiceCoachConnectionError(
+          "NegotiationError: negotiation timed out /rtc/v1/validate v1 RTC path not found",
+        ),
+      );
+      try {
+        conversation.endSession();
+      } catch (err) {
+        console.warn("[voice-coach] endSession skipped:", err);
+      }
+      phaseRef.current = "idle";
+      setPhase("idle");
+    }, timeoutMs);
+
+    return () => window.clearTimeout(timer);
+  }, [conversation, phase]);
 
   const avatarIsActive = phase === "active" || phase === "ending";
   const avatarIsSpeaking = avatarIsActive && conversation.isSpeaking;
@@ -688,7 +744,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, [avatarIsActive, avatarIsSpeaking]);
 
   const safeEndConversation = useCallback(() => {
-    if (!sessionStartedRef.current) return;
+    const shouldAttemptEnd =
+      sessionStartedRef.current ||
+      conversation.status === "connected" ||
+      phaseRef.current === "loading" ||
+      phaseRef.current === "active" ||
+      phaseRef.current === "ending";
+    if (!shouldAttemptEnd) return;
+
     try {
       conversation.endSession();
     } catch (err) {
@@ -697,6 +760,78 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       sessionStartedRef.current = false;
     }
   }, [conversation]);
+
+  useEffect(() => {
+    if (phase !== "loading" || loadingFailureHandledRef.current) {
+      return;
+    }
+
+    if (conversation.status !== "disconnected") {
+      loadingSawNonDisconnectedStatusRef.current = true;
+      return;
+    }
+
+    const hasStartedNegotiation = loadingSawNonDisconnectedStatusRef.current;
+    const exceededGracePeriod = Date.now() - startedAtRef.current > 4_000;
+    if (!hasStartedNegotiation || !exceededGracePeriod) {
+      return;
+    }
+
+    loadingFailureHandledRef.current = true;
+
+    const pending = pendingConnectRef.current;
+    if (
+      pending?.authMode === "signed" &&
+      pending.agentId &&
+      !loadingPublicRetryRef.current
+    ) {
+      loadingPublicRetryRef.current = true;
+      pendingConnectRef.current = {
+        authMode: "public",
+        agentId: pending.agentId,
+        sessionOptions: pending.sessionOptions,
+      };
+      setConnectHint(
+        "Signed handshake stalled. Retrying with public agent connection…",
+      );
+      void conversation.startSession({
+        agentId: pending.agentId,
+        connectionType: "websocket",
+        ...pending.sessionOptions,
+      });
+      return;
+    }
+
+    pendingConnectRef.current = null;
+    negotiationRetriesRef.current = 0;
+    sessionStartedRef.current = false;
+    loadingPublicRetryRef.current = false;
+    setConnectHint(null);
+    setNotice(null);
+    setError(
+      formatVoiceCoachConnectionError(
+        "NegotiationError: negotiation timed out /rtc/v1/validate v1 RTC path not found",
+      ),
+    );
+    safeEndConversation();
+    phaseRef.current = "idle";
+    setPhase("idle");
+  }, [
+    conversation,
+    conversation.status,
+    handleFallbackStartFailure,
+    phase,
+    safeEndConversation,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      pendingConnectRef.current = null;
+      negotiationRetriesRef.current = 0;
+      autoEndingRef.current = false;
+      safeEndConversation();
+    };
+  }, [safeEndConversation]);
 
   const getConversationId = useCallback((): string | undefined => {
     if (!sessionStartedRef.current) return undefined;
@@ -709,24 +844,39 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, [conversation]);
 
   const startSession = useCallback(async () => {
+    if (isStartingRef.current || phaseRef.current === "loading") {
+      setNotice("A connection attempt is already in progress...");
+      return;
+    }
+
+    isStartingRef.current = true;
+    const startAttemptId = ++startAttemptCounterRef.current;
+    activeStartAttemptRef.current = startAttemptId;
+
     getOrCreateStoredUserName();
+    safeEndConversation();
     setError(null);
     setNotice(null);
     setConnectHint(null);
     negotiationRetriesRef.current = 0;
+    loadingPublicRetryRef.current = false;
+    loadingSawNonDisconnectedStatusRef.current = false;
+    loadingFailureHandledRef.current = false;
     pendingConnectRef.current = null;
     sessionStartedRef.current = false;
+    activeConnectedAtRef.current = 0;
     autoEndingRef.current = false;
     phaseRef.current = "loading";
     setPhase("loading");
     setTask(null);
     setSummary(null);
     setAutoEndedByVoice(false);
+    setShowMessages(false);
     setMessages([]);
     transcriptRef.current = [];
 
     try {
-      await navigator.mediaDevices.getUserMedia({
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -734,6 +884,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           channelCount: 1,
         },
       });
+      permissionStream.getTracks().forEach((track) => track.stop());
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -752,6 +903,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to start session");
       }
+      if (activeStartAttemptRef.current !== startAttemptId) return;
 
       if (!data.memory) {
         throw new Error("Invalid session response from server");
@@ -767,12 +919,13 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           "Connecting via public agent — ensure your ElevenLabs agent is Public under Security.",
         );
       } else if (data.authMode === "signed") {
-        setConnectHint("Connecting securely…");
+        setConnectHint("Connecting via websocket…");
       }
 
       startedAtRef.current = Date.now();
 
       const sessionOptions = {
+        serverLocation: "in-residency" as const,
         dynamicVariables: {
           mode,
           memory: data.memory,
@@ -784,6 +937,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         pending = {
           authMode: "signed",
           signedUrl: data.signedUrl,
+          agentId: data.agentId,
           sessionOptions,
         };
       } else if (data.authMode === "public" && data.agentId) {
@@ -803,18 +957,23 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       if (pending.authMode === "signed" && pending.signedUrl) {
         await conversation.startSession({
           signedUrl: pending.signedUrl,
+          connectionType: "websocket",
           ...pending.sessionOptions,
         });
       } else if (pending.authMode === "public" && pending.agentId) {
+        loadingPublicRetryRef.current = true;
         await conversation.startSession({
           agentId: pending.agentId,
+          connectionType: "websocket",
           ...pending.sessionOptions,
         });
       }
     } catch (err) {
+      if (activeStartAttemptRef.current !== startAttemptId) return;
       console.error("[voice-coach] start failed:", err);
       pendingConnectRef.current = null;
       sessionStartedRef.current = false;
+      loadingPublicRetryRef.current = false;
       safeEndConversation();
       setConnectHint(null);
       setError(
@@ -825,6 +984,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       );
       phaseRef.current = "idle";
       setPhase("idle");
+    } finally {
+      if (activeStartAttemptRef.current === startAttemptId) {
+        isStartingRef.current = false;
+      }
     }
   }, [conversation, mode, safeEndConversation]);
 
@@ -839,6 +1002,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
     pendingConnectRef.current = null;
     negotiationRetriesRef.current = 0;
+    loadingPublicRetryRef.current = false;
     setConnectHint(null);
     setAutoEndedByVoice(triggeredByVoiceIntent);
     autoEndingRef.current = true;
@@ -1161,9 +1325,71 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
                   {phase === "ending" ? "Saving session…" : "End session"}
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setShowMessages(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MessageSquareText className="h-4 w-4" />
+                View Messages {messages.length > 0 ? `(${messages.length})` : ""}
+              </button>
             </div>
           </div>
         </div>
+        {showMessages && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+            <div className="max-h-[80vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#111114] shadow-[0_0_40px_rgba(0,0,0,0.35)]">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+                <h3 className="text-lg font-semibold text-white">Live Messages</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowMessages(false)}
+                  className="rounded-md border border-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="max-h-[65vh] space-y-3 overflow-y-auto px-5 py-4">
+                {messages.length === 0 ? (
+                  <p className="text-sm text-[#9ca3af]">No messages yet for this session.</p>
+                ) : (
+                  messages.map((message, index) => (
+                    <div
+                      key={`${message.timestamp}-${index}`}
+                      className={`rounded-xl border px-4 py-3 ${
+                        message.role === "agent"
+                          ? "border-[#8b5cf6]/25 bg-[#8b5cf6]/10"
+                          : "border-white/10 bg-[#0b0b0d]"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                            message.role === "agent"
+                              ? "border-[#8b5cf6]/45 bg-[#8b5cf6]/20 text-[#d8b4fe]"
+                              : "border-white/15 bg-white/10 text-white"
+                          }`}
+                        >
+                          {message.role === "agent" ? (
+                            <CoachFace avatar={coachAvatar} speaking={false} size="small" />
+                          ) : (
+                            <UserRound className="h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
+                            {message.role === "agent" ? coachAvatar.name : "You"}
+                          </p>
+                          <p className="mt-1 text-sm text-white">{message.text}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         <HistoryContent
           selectedHistoryItem={selectedHistoryItem}
           selectedHistoryMessages={selectedHistoryMessages}
