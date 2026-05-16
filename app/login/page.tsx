@@ -1,11 +1,22 @@
-import type { Metadata } from "next";
-import SignUpPage from "@/components/auth/sign-up-page";
+import type { Metadata } from 'next'
+import { Suspense } from 'react'
+import LoginPage from '@/components/auth/login-page'
 
 export const metadata: Metadata = {
-  title: "Create Account — Podium AI",
-  description: "Sign up for Podium AI and start practicing with AI voice coaches.",
-};
+  title: 'Log in — Podium AI',
+  description: 'Sign in to Podium AI and continue your voice coaching sessions.',
+}
 
-export default function LoginPage() {
-  return <SignUpPage />;
+export default function Page() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-[#050505] text-sm text-[#9ca3af]">
+          Loading…
+        </div>
+      }
+    >
+      <LoginPage />
+    </Suspense>
+  )
 }
