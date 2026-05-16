@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Link from "next/link";
 import {
+  MessageSquareText,
   Mic,
   Sparkles,
   Square,
@@ -14,6 +15,11 @@ import {
   formatVoiceCoachConnectionError,
   isNegotiationTimeout,
 } from "@/lib/voice-coach-connection-errors";
+import {
+  prepareMicrophoneForVoiceSession,
+  releaseMicrophoneForVoiceSession,
+  VOICE_COACH_MIC_STABILIZATION_MS,
+} from "@/lib/voice-coach-microphone";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
@@ -48,6 +54,60 @@ interface PendingConnect {
 
 interface VoiceCoachSessionProps {
   mode: VoiceCoachMode;
+}
+
+const SESSION_THREE_COLUMN_LAYOUT =
+  "flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6 xl:gap-10";
+const SESSION_HISTORY_COLUMN = "w-full shrink-0 lg:w-52";
+const SESSION_COACH_COLUMN = "min-w-0 w-full flex-1";
+const SESSION_TRANSCRIPT_COLUMN = "w-full shrink-0 lg:ml-auto lg:w-72 lg:max-w-[280px]";
+
+function getErrorContextText(context: unknown): string {
+  if (context instanceof Error) return `${context.name} ${context.message}`;
+  if (typeof context === "string") return context;
+  try {
+    return JSON.stringify(context ?? "");
+  } catch {
+    return String(context ?? "");
+  }
+}
+
+const RETRY_CLOSE_DELAY_MS = 400;
+const MAX_NEGOTIATION_RETRIES = 2;
+
+type ConversationHandle = ReturnType<typeof useConversation>;
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isSdkConnected(conv: ConversationHandle | null | undefined): boolean {
+  return conv?.status === "connected";
+}
+
+function isWebSocketClosedError(message: string, context?: unknown): boolean {
+  const combined = `${message} ${getErrorContextText(context)}`.toLowerCase();
+  return (
+    combined.includes("closing or closed") ||
+    combined.includes("websocket is already") ||
+    combined.includes("closed before session start") ||
+    combined.includes("already in closing")
+  );
+}
+
+function isRetryableStartupFailure(message: string, context?: unknown): boolean {
+  const combined = `${message} ${getErrorContextText(context)}`.toLowerCase();
+  return (
+    isNegotiationTimeout(message, context) ||
+    combined.includes("v1 rtc path not found") ||
+    combined.includes("/rtc/v1/validate") ||
+    combined.includes("unknown datachannel error") ||
+    combined.includes("websocket") ||
+    combined.includes("closed before session start") ||
+    combined.includes("did not complete")
+  );
 }
 
 const MODE_SURFACE_STYLES: Record<
@@ -204,20 +264,6 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   }
 
   return { role, text: text.trim(), timestamp: Date.now() };
-}
-
-function isSessionEndIntent(text: string): boolean {
-  const normalized = text.toLowerCase();
-  const patterns = [
-    /\blet'?s end (this|the)?\s*session\b/,
-    /\bend (this|the)?\s*session\b/,
-    /\bstop (this|the)?\s*session\b/,
-    /\bfinish (this|the)?\s*session\b/,
-    /\bthat'?s all\b/,
-    /\bwe are done\b/,
-    /\bi am done\b/,
-  ];
-  return patterns.some((pattern) => pattern.test(normalized));
 }
 
 function summarizeMessageTitle(text: string): string {
@@ -386,39 +432,92 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [connectHint, setConnectHint] = useState<string | null>(null);
   const [task, setTask] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [autoEndedByVoice, setAutoEndedByVoice] = useState(false);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [historyItems, setHistoryItems] = useState<VoiceCoachHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [showMessages, setShowMessages] = useState(false);
   const [avatarBlinking, setAvatarBlinking] = useState(false);
   const [avatarMouthLevel, setAvatarMouthLevel] = useState<0 | 1 | 2 | 3>(0);
   const [avatarGaze, setAvatarGaze] = useState<"center" | "left" | "right">("center");
   const [avatarHeadMotionClass, setAvatarHeadMotionClass] = useState("rotate-0 translate-y-0");
   const transcriptRef = useRef<string[]>([]);
   const startedAtRef = useRef<number>(0);
+  const activeConnectedAtRef = useRef<number>(0);
   const phaseRef = useRef<SessionPhase>("idle");
   const pendingConnectRef = useRef<PendingConnect | null>(null);
   const negotiationRetriesRef = useRef(0);
+  const loadingPublicRetryRef = useRef(false);
+  const loadingFailureHandledRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const startAttemptCounterRef = useRef(0);
+  const activeStartAttemptRef = useRef(0);
   const sessionStartedRef = useRef(false);
   const autoEndingRef = useRef(false);
+  const conversationIdRef = useRef<string | null>(null);
+  const conversationRef = useRef<ConversationHandle | null>(null);
+  const isMountedRef = useRef(false);
+  const connectionLockRef = useRef(false);
+  const inputDeviceIdRef = useRef<string | undefined>(undefined);
+  const onConnectRef = useRef<() => void>(() => undefined);
+  const onDisconnectRef = useRef<() => void>(() => undefined);
+  const onMessageRef = useRef<(message: unknown) => void>(() => undefined);
+  const onErrorRef = useRef<(message: string, context: unknown) => void>(() => undefined);
+  const [storedConversationId, setStoredConversationId] = useState<string | null>(
+    null,
+  );
+
+  const historyLoadGenerationRef = useRef(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      historyLoadGenerationRef.current += 1;
+      activeStartAttemptRef.current = ++startAttemptCounterRef.current;
+      connectionLockRef.current = false;
+      releaseMicrophoneForVoiceSession();
+      void (async () => {
+        const conv = conversationRef.current;
+        if (!conv || conv.status === "disconnected") return;
+        try {
+          await conv.endSession();
+        } catch {
+          // Socket may already be closed — stopping mic is best-effort on unmount.
+        } finally {
+          releaseMicrophoneForVoiceSession();
+        }
+      })();
+    };
+  }, []);
 
   const loadHistory = useCallback(async () => {
+    const loadGeneration = ++historyLoadGenerationRef.current;
+
     setHistoryLoading(true);
     setHistoryError(null);
 
+    const isStale = () => loadGeneration !== historyLoadGenerationRef.current;
+
     try {
       const response = await fetch("/api/voice-coach/history");
-      const data = (await response.json()) as {
+
+      if (isStale()) return;
+
+      const data = await parseApiJson<{
         items?: VoiceCoachHistoryItem[];
         error?: string;
         warning?: string;
         persisted?: boolean;
-      };
+      }>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Failed to load chat history");
       }
+
+      if (isStale() || !isMountedRef.current) return;
 
       setHistoryItems(data.items ?? []);
       if (data.warning) {
@@ -427,20 +526,38 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         setHistoryError("History is temporarily unavailable.");
       }
     } catch (err) {
+      if (isStale() || !isMountedRef.current) return;
+
+      const message =
+        err instanceof Error ? err.message : "Failed to load chat history";
+      const isAbort =
+        (err instanceof DOMException && err.name === "AbortError") ||
+        message.toLowerCase().includes("aborted");
+
+      if (isAbort) return;
+
       console.error("[voice-coach] history load failed:", err);
       setHistoryError(
-        err instanceof Error ? err.message : "Failed to load chat history",
+        message === "Failed to fetch"
+          ? "Could not reach the server. Check your connection and that npm run dev is running."
+          : message,
       );
     } finally {
-      setHistoryLoading(false);
+      if (!isStale() && isMountedRef.current) {
+        setHistoryLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadHistory();
+      if (isMountedRef.current) {
+        void loadHistory();
+      }
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadHistory]);
 
   const liveConversationItem = useMemo(() => {
@@ -459,6 +576,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       title: `Current: ${title}`,
       mode,
       summary: null,
+      task: null,
       transcript,
       createdAt: null,
       durationSeconds: null,
@@ -521,106 +639,361 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     };
   }, []);
 
-  const conversation = useConversation({
-    onConnect: () => {
-      negotiationRetriesRef.current = 0;
-      pendingConnectRef.current = null;
-      sessionStartedRef.current = true;
-      setConnectHint(null);
-      phaseRef.current = "active";
-      setPhase("active");
-      setError(null);
-    },
-    onDisconnect: () => {
+  const handleFallbackStartFailure = useCallback((retryErr: unknown) => {
+    loadingFailureHandledRef.current = true;
+    pendingConnectRef.current = null;
+    negotiationRetriesRef.current = 0;
+    sessionStartedRef.current = false;
+    loadingPublicRetryRef.current = false;
+    setConnectHint(null);
+    setNotice(null);
+    setError(
+      formatVoiceCoachConnectionError(
+        retryErr instanceof Error
+          ? retryErr.message
+          : "Public fallback connection failed",
+        retryErr,
+      ),
+    );
+    if (!isMountedRef.current) return;
+    phaseRef.current = "idle";
+    setPhase("idle");
+    conversationIdRef.current = null;
+    setStoredConversationId(null);
+  }, []);
+
+  const endSdkSessionIfOpen = useCallback(async () => {
+    releaseMicrophoneForVoiceSession();
+    const conv = conversationRef.current;
+    if (!conv || conv.status === "disconnected") {
       sessionStartedRef.current = false;
-      setPhase((current) => {
-        if (current === "active") {
+      connectionLockRef.current = false;
+      return;
+    }
+    try {
+      await conv.endSession();
+    } catch (err) {
+      console.warn("[voice-coach] endSession skipped:", err);
+    } finally {
+      sessionStartedRef.current = false;
+      connectionLockRef.current = false;
+      releaseMicrophoneForVoiceSession();
+    }
+    await delayMs(RETRY_CLOSE_DELAY_MS);
+  }, []);
+
+  const startSdkSession = useCallback(
+    async (options: Parameters<ConversationHandle["startSession"]>[0]) => {
+      const conv = conversationRef.current;
+      if (!conv) {
+        throw new Error("Voice SDK not ready");
+      }
+      if (isSdkConnected(conv)) {
+        return;
+      }
+      if (connectionLockRef.current) {
+        return;
+      }
+      connectionLockRef.current = true;
+      try {
+        await conv.startSession(options);
+      } catch (err) {
+        connectionLockRef.current = false;
+        throw err;
+      }
+    },
+    [],
+  );
+
+  const connectWithPending = useCallback(
+    async (pending: PendingConnect) => {
+      const sessionDevice = { inputDeviceId: inputDeviceIdRef.current };
+      if (pending.authMode === "signed" && pending.signedUrl) {
+        await startSdkSession({
+          signedUrl: pending.signedUrl,
+          connectionType: "websocket",
+          ...sessionDevice,
+          ...pending.sessionOptions,
+        });
+        return;
+      }
+      if (pending.authMode === "public" && pending.agentId) {
+        await startSdkSession({
+          agentId: pending.agentId,
+          connectionType: "webrtc",
+          ...sessionDevice,
+          ...pending.sessionOptions,
+        });
+      }
+    },
+    [startSdkSession],
+  );
+
+  const retryPendingConnect = useCallback(
+    async (hint: string) => {
+      const pending = pendingConnectRef.current;
+      if (!pending || phaseRef.current !== "loading") return;
+
+      setConnectHint(hint);
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
+
+      const mic = await prepareMicrophoneForVoiceSession();
+      inputDeviceIdRef.current = mic.inputDeviceId;
+      await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
+      await connectWithPending(pending);
+    },
+    [connectWithPending, endSdkSessionIfOpen],
+  );
+
+  onConnectRef.current = () => {
+    if (!isMountedRef.current) return;
+    connectionLockRef.current = false;
+    negotiationRetriesRef.current = 0;
+    pendingConnectRef.current = null;
+    sessionStartedRef.current = true;
+    loadingFailureHandledRef.current = false;
+    activeConnectedAtRef.current = Date.now();
+    setConnectHint(null);
+    phaseRef.current = "active";
+    setPhase("active");
+    setError(null);
+
+    try {
+      const id = conversationRef.current?.getId() || null;
+      conversationIdRef.current = id;
+      setStoredConversationId(id);
+    } catch (err) {
+      console.warn("[voice-coach] getId on connect skipped:", err);
+    }
+  };
+
+  onDisconnectRef.current = () => {
+    sessionStartedRef.current = false;
+    connectionLockRef.current = false;
+
+    if (!isMountedRef.current) {
+      void endSdkSessionIfOpen();
+      return;
+    }
+
+    if (phaseRef.current === "loading") {
+      void endSdkSessionIfOpen();
+      return;
+    }
+
+    if (
+      phaseRef.current === "ending" ||
+      phaseRef.current === "done" ||
+      autoEndingRef.current
+    ) {
+      return;
+    }
+
+    void (async () => {
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current) return;
+      if (phaseRef.current === "active") {
+        setNotice(
+          "Connection lost. Start again to continue, or End session to save.",
+        );
+        phaseRef.current = "idle";
+        setPhase("idle");
+      }
+    })();
+  };
+
+  onMessageRef.current = (message: unknown) => {
+    if (!isMountedRef.current) return;
+
+    const normalized = normalizeConversationMessage(message);
+    if (normalized) {
+      setMessages((current) => [...current, normalized]);
+      transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+      return;
+    }
+
+    const fallback = (
+      typeof message === "string" ? message : JSON.stringify(message ?? "")
+    ).trim();
+    if (fallback) {
+      transcriptRef.current.push(fallback);
+    }
+  };
+
+  onErrorRef.current = (message: string, context: unknown) => {
+    if (!isMountedRef.current) return;
+
+    if (isWebSocketClosedError(message, context)) {
+      void (async () => {
+        await endSdkSessionIfOpen();
+        if (!isMountedRef.current) return;
+        if (phaseRef.current === "active") {
+          setNotice(
+            "Voice connection closed. Check that your ElevenLabs agent is Public, then start again.",
+          );
           phaseRef.current = "idle";
-          return "idle";
+          setPhase("idle");
         }
-        return current;
-      });
-    },
-    onMessage: (message) => {
-      const normalized = normalizeConversationMessage(message);
-      if (normalized) {
-        setMessages((current) => [...current, normalized]);
-        transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+      })();
+      return;
+    }
+
+    console.error("[voice-coach] conversation error:", message, context);
+
+    const pending = pendingConnectRef.current;
+    if (
+      phaseRef.current === "loading" &&
+      pending?.authMode === "signed" &&
+      pending.agentId &&
+      !loadingPublicRetryRef.current &&
+      isRetryableStartupFailure(message, context)
+    ) {
+      loadingPublicRetryRef.current = true;
+      pendingConnectRef.current = {
+        authMode: "public",
+        agentId: pending.agentId,
+        sessionOptions: pending.sessionOptions,
+      };
+      setConnectHint(
+        "Signed handshake failed. Retrying with public agent connection…",
+      );
+      const publicPending = {
+        authMode: "public" as const,
+        agentId: pending.agentId,
+        sessionOptions: pending.sessionOptions,
+      };
+      void (async () => {
+        await endSdkSessionIfOpen();
         if (
-          normalized.role === "user" &&
-          phaseRef.current === "active" &&
-          !autoEndingRef.current &&
-          isSessionEndIntent(normalized.text)
+          !isMountedRef.current ||
+          phaseRef.current !== "loading" ||
+          !pendingConnectRef.current
         ) {
-          autoEndingRef.current = true;
-          setNotice("Ending session now — saving your task and chat history...");
-          window.setTimeout(() => {
-            void endSession(true);
-          }, 0);
+          return;
         }
-        return;
-      }
+        try {
+          await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+          await connectWithPending(publicPending);
+        } catch (retryErr) {
+          if (isMountedRef.current) {
+            handleFallbackStartFailure(retryErr);
+          }
+        }
+      })();
+      return;
+    }
 
-      const rawMessage: unknown = message;
-      const fallback = (
-        typeof rawMessage === "string"
-          ? rawMessage
-          : JSON.stringify(rawMessage ?? "")
-      ).trim();
-      if (fallback) {
-        transcriptRef.current.push(fallback);
+    if (
+      phaseRef.current === "loading" &&
+      pendingConnectRef.current &&
+      !loadingFailureHandledRef.current &&
+      isRetryableStartupFailure(message, context) &&
+      !isWebSocketClosedError(message, context) &&
+      negotiationRetriesRef.current < MAX_NEGOTIATION_RETRIES
+    ) {
+      negotiationRetriesRef.current += 1;
+      void retryPendingConnect(
+        `Voice handshake failed. Retrying (${negotiationRetriesRef.current}/${MAX_NEGOTIATION_RETRIES})…`,
+      ).catch((retryErr) => {
+        if (isMountedRef.current) {
+          handleFallbackStartFailure(retryErr);
+        }
+      });
+      return;
+    }
+
+    if (phaseRef.current === "active" || phaseRef.current === "ending") {
+      void endSdkSessionIfOpen();
+      setNotice(
+        `Connection issue: ${formatVoiceCoachConnectionError(message, context).split("\n")[0]}`,
+      );
+      if (phaseRef.current === "active") {
+        phaseRef.current = "idle";
+        setPhase("idle");
       }
+      return;
+    }
+
+    loadingFailureHandledRef.current = true;
+    pendingConnectRef.current = null;
+    negotiationRetriesRef.current = 0;
+    sessionStartedRef.current = false;
+    loadingPublicRetryRef.current = false;
+    connectionLockRef.current = false;
+    setConnectHint(null);
+    setError(formatVoiceCoachConnectionError(message, context));
+    phaseRef.current = "idle";
+    setPhase("idle");
+    void endSdkSessionIfOpen();
+  };
+
+  const conversation = useConversation({
+    connectionDelay: {
+      android: 3_000,
+      ios: 0,
+      default: 1_000,
     },
-    onError: (message, context) => {
-      console.error("[voice-coach] conversation error:", message, context);
+    onConnect: () => onConnectRef.current(),
+    onDisconnect: () => onDisconnectRef.current(),
+    onMessage: (message) => onMessageRef.current(message),
+    onError: (message, context) => onErrorRef.current(message, context),
+  });
 
-      if (
-        phaseRef.current === "loading" &&
-        isNegotiationTimeout(message, context) &&
-        negotiationRetriesRef.current < 1 &&
-        pendingConnectRef.current
-      ) {
-        negotiationRetriesRef.current += 1;
-        setNotice("Connection timed out — retrying once…");
-        if (sessionStartedRef.current) {
-          try {
-            conversation.endSession();
-          } catch (err) {
-            console.warn("[voice-coach] endSession skipped:", err);
-          } finally {
-            sessionStartedRef.current = false;
-          }
-        }
-        const pending = pendingConnectRef.current;
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
 
-        window.setTimeout(() => {
-          if (phaseRef.current !== "loading" || !pendingConnectRef.current) {
-            return;
-          }
+  useEffect(() => {
+    if (phase !== "loading") return;
 
-          if (pending.authMode === "signed" && pending.signedUrl) {
-            void conversation.startSession({
-              signedUrl: pending.signedUrl,
-              ...pending.sessionOptions,
-            });
-          } else if (pending.authMode === "public" && pending.agentId) {
-            void conversation.startSession({
-              agentId: pending.agentId,
-              ...pending.sessionOptions,
-            });
-          }
-        }, 1500);
-        return;
-      }
+    const timeoutMs = 25_000;
+    const timer = window.setTimeout(() => {
+      if (!isMountedRef.current || phaseRef.current !== "loading") return;
 
       pendingConnectRef.current = null;
       negotiationRetriesRef.current = 0;
+      sessionStartedRef.current = false;
+      loadingPublicRetryRef.current = false;
+      loadingFailureHandledRef.current = true;
+      isStartingRef.current = false;
+      connectionLockRef.current = false;
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
       setConnectHint(null);
-      setError(formatVoiceCoachConnectionError(message, context));
+      setNotice(null);
+      setError(
+        formatVoiceCoachConnectionError(
+          "NegotiationError: negotiation timed out /rtc/v1/validate v1 RTC path not found",
+        ),
+      );
+      void endSdkSessionIfOpen().then(() => {
+        if (!isMountedRef.current || phaseRef.current !== "loading") return;
+        phaseRef.current = "idle";
+        setPhase("idle");
+      });
+    }, timeoutMs);
+
+    return () => window.clearTimeout(timer);
+  }, [endSdkSessionIfOpen, phase]);
+
+  const prevModeRef = useRef(mode);
+  useEffect(() => {
+    if (prevModeRef.current === mode) return;
+    prevModeRef.current = mode;
+    activeStartAttemptRef.current = ++startAttemptCounterRef.current;
+    if (phaseRef.current !== "active" && phaseRef.current !== "loading") {
+      return;
+    }
+    void endSdkSessionIfOpen().then(() => {
+      if (!isMountedRef.current) return;
+      setNotice("Practice mode changed. Start again to connect.");
       phaseRef.current = "idle";
       setPhase("idle");
-    },
-  });
+    });
+  }, [endSdkSessionIfOpen, mode]);
 
   const avatarIsActive = phase === "active" || phase === "ending";
   const avatarIsSpeaking = avatarIsActive && conversation.isSpeaking;
@@ -664,7 +1037,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         : 0;
       setAvatarMouthLevel(mouthFrame);
 
-      const poses = avatarIsSpeaking ? speakingPoses : listeningPoses;
+      const poses = avatarIsSpeaking
+        ? speakingPoses
+        : avatarIsActive
+          ? listeningPoses
+          : (["rotate-0 translate-y-0"] as const);
       setAvatarHeadMotionClass(poses[Math.floor(Math.random() * poses.length)]);
     }, avatarIsSpeaking ? 140 : 620);
 
@@ -674,51 +1051,77 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     };
   }, [avatarIsActive, avatarIsSpeaking]);
 
-  function safeEndConversation() {
-    if (!sessionStartedRef.current) return;
-    try {
-      conversation.endSession();
-    } catch (err) {
-      console.warn("[voice-coach] endSession skipped:", err);
-    } finally {
-      sessionStartedRef.current = false;
+  const getConversationId = useCallback((): string | undefined => {
+    if (conversationIdRef.current) {
+      return conversationIdRef.current;
     }
-  }
-
-  function getConversationId(): string | undefined {
-    if (!sessionStartedRef.current) return undefined;
+    if (conversation.status !== "connected") {
+      return undefined;
+    }
     try {
-      return conversation.getId() || undefined;
+      const id = conversation.getId() || undefined;
+      if (id) {
+        conversationIdRef.current = id;
+        if (isMountedRef.current) {
+          setStoredConversationId(id);
+        }
+      }
+      return id;
     } catch (err) {
       console.warn("[voice-coach] getId skipped:", err);
       return undefined;
     }
-  }
+  }, [conversation]);
 
-  async function startSession() {
+  const startSession = useCallback(async () => {
+    if (isStartingRef.current || phaseRef.current === "loading") {
+      setNotice("A connection attempt is already in progress...");
+      return;
+    }
+
+    isStartingRef.current = true;
+    const startAttemptId = ++startAttemptCounterRef.current;
+    activeStartAttemptRef.current = startAttemptId;
+
     setError(null);
     setNotice(null);
     setConnectHint(null);
     negotiationRetriesRef.current = 0;
+    loadingPublicRetryRef.current = false;
+    loadingFailureHandledRef.current = false;
     pendingConnectRef.current = null;
     sessionStartedRef.current = false;
+    conversationIdRef.current = null;
+    setStoredConversationId(null);
+    activeConnectedAtRef.current = 0;
     autoEndingRef.current = false;
     phaseRef.current = "loading";
     setPhase("loading");
     setTask(null);
     setSummary(null);
+    setAutoEndedByVoice(false);
+    setShowMessages(false);
     setMessages([]);
     transcriptRef.current = [];
 
     try {
-      await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
+      await endSdkSessionIfOpen();
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
+      if (isSdkConnected(conversationRef.current)) {
+        phaseRef.current = "active";
+        setPhase("active");
+        return;
+      }
+
+      const mic = await prepareMicrophoneForVoiceSession();
+      inputDeviceIdRef.current = mic.inputDeviceId;
+      await delayMs(VOICE_COACH_MIC_STABILIZATION_MS);
+
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -736,6 +1139,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to start session");
       }
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
 
       if (!data.memory) {
         throw new Error("Invalid session response from server");
@@ -751,7 +1157,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           "Connecting via public agent — ensure your ElevenLabs agent is Public under Security.",
         );
       } else if (data.authMode === "signed") {
-        setConnectHint("Connecting securely…");
+        setConnectHint("Connecting via websocket…");
       }
 
       startedAtRef.current = nowTimestamp();
@@ -768,6 +1174,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         pending = {
           authMode: "signed",
           signedUrl: data.signedUrl,
+          agentId: data.agentId,
           sessionOptions,
         };
       } else if (data.authMode === "public" && data.agentId) {
@@ -784,22 +1191,19 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       }
 
       pendingConnectRef.current = pending;
-      if (pending.authMode === "signed" && pending.signedUrl) {
-        await conversation.startSession({
-          signedUrl: pending.signedUrl,
-          ...pending.sessionOptions,
-        });
-      } else if (pending.authMode === "public" && pending.agentId) {
-        await conversation.startSession({
-          agentId: pending.agentId,
-          ...pending.sessionOptions,
-        });
-      }
+      await connectWithPending(pending);
     } catch (err) {
+      if (!isMountedRef.current || activeStartAttemptRef.current !== startAttemptId) {
+        return;
+      }
       console.error("[voice-coach] start failed:", err);
+      connectionLockRef.current = false;
+      await endSdkSessionIfOpen();
       pendingConnectRef.current = null;
       sessionStartedRef.current = false;
-      safeEndConversation();
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
+      loadingPublicRetryRef.current = false;
       setConnectHint(null);
       setError(
         formatVoiceCoachConnectionError(
@@ -809,31 +1213,63 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       );
       phaseRef.current = "idle";
       setPhase("idle");
+    } finally {
+      if (
+        isMountedRef.current &&
+        activeStartAttemptRef.current === startAttemptId
+      ) {
+        isStartingRef.current = false;
+      }
     }
-  }
+  }, [connectWithPending, conversation, endSdkSessionIfOpen, mode]);
 
-  async function endSession(triggeredByVoiceIntent = false) {
-    if (phaseRef.current !== "active" && !sessionStartedRef.current) {
-      console.warn("[voice-coach] endSession called with no active conversation");
+  const endSession = useCallback(async (triggeredByVoiceIntent = false) => {
+    const conversationId =
+      conversationIdRef.current ?? storedConversationId ?? getConversationId();
+
+    if (
+      phaseRef.current !== "active" &&
+      phaseRef.current !== "ending" &&
+      !conversationId
+    ) {
       return;
     }
 
     pendingConnectRef.current = null;
     negotiationRetriesRef.current = 0;
+    loadingPublicRetryRef.current = false;
     setConnectHint(null);
+    setAutoEndedByVoice(triggeredByVoiceIntent);
     autoEndingRef.current = true;
+    phaseRef.current = "ending";
     setPhase("ending");
-    const conversationId = getConversationId();
+
     if (!conversationId) {
-      console.warn("[voice-coach] endSession skipped: missing conversation id");
-      safeEndConversation();
+      sessionStartedRef.current = false;
       setError("No active conversation found. Start a new session and try again.");
       phaseRef.current = "idle";
       setPhase("idle");
+      isStartingRef.current = false;
+      autoEndingRef.current = false;
       return;
     }
 
-    safeEndConversation();
+    releaseMicrophoneForVoiceSession();
+    if (conversation.status !== "disconnected") {
+      try {
+        await conversation.endSession();
+      } catch (err) {
+        console.warn("[voice-coach] endSession skipped:", err);
+      } finally {
+        releaseMicrophoneForVoiceSession();
+      }
+    }
+    sessionStartedRef.current = false;
+
+    if (!isMountedRef.current) {
+      autoEndingRef.current = false;
+      return;
+    }
 
     const durationSeconds = Math.round(
       (nowTimestamp() - startedAtRef.current) / 1000,
@@ -867,6 +1303,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         throw new Error(data.error ?? "Failed to save session");
       }
 
+      if (!isMountedRef.current) return;
+
       setTask(data.task ?? null);
       setSummary(data.summary ?? null);
       if (data.warning) {
@@ -876,9 +1314,12 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       } else {
         setNotice(null);
       }
+      conversationIdRef.current = null;
+      setStoredConversationId(null);
       setPhase("done");
       void loadHistory();
     } catch (err) {
+      if (!isMountedRef.current) return;
       console.error("[voice-coach] end session failed:", err);
       setError(
         formatVoiceCoachConnectionError(
@@ -889,28 +1330,37 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       phaseRef.current = "idle";
       setPhase("idle");
     } finally {
-      autoEndingRef.current = false;
+      if (isMountedRef.current) {
+        autoEndingRef.current = false;
+        isStartingRef.current = false;
+      }
     }
-  }
+  }, [conversation, getConversationId, loadHistory, mode, storedConversationId]);
 
   const coachAvatar = MODE_COACH_AVATAR[mode];
 
   if (phase === "done") {
     return (
-      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className={SESSION_THREE_COLUMN_LAYOUT}>
         <HistorySidebar
           items={allHistoryItems}
           historyLoading={historyLoading}
           historyError={historyError}
           selectedHistoryId={effectiveSelectedHistoryId}
           onSelect={setSelectedHistoryId}
+          className={SESSION_HISTORY_COLUMN}
         />
-        <div className="space-y-5">
+        <div className={SESSION_COACH_COLUMN}>
           <div className="rounded-3xl border border-white/[0.08] bg-[#101014] p-8 shadow-[0_0_45px_rgba(139,92,246,0.1)]">
             <p className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
               <Sparkles className="h-3.5 w-3.5" />
               Session complete
             </p>
+            {autoEndedByVoice && (
+              <p className="mt-2 inline-flex items-center gap-2 rounded-full border border-blue-500/35 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-200">
+                Auto-ended by voice command
+              </p>
+            )}
             <h2 className="mt-3 text-2xl font-bold text-white">
               Great work today in {mode}
             </h2>
@@ -922,30 +1372,48 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
                 setPhase("idle");
                 setTask(null);
                 setSummary(null);
+                setAutoEndedByVoice(false);
+                setError(null);
+                setNotice(null);
+                setConnectHint(null);
+                conversationIdRef.current = null;
+                setStoredConversationId(null);
               }}
             />
           </div>
-          <HistoryContent
-            selectedHistoryItem={selectedHistoryItem}
-            selectedHistoryMessages={selectedHistoryMessages}
-            selectedHistoryIndex={selectedHistoryIndex}
-            coachAvatar={coachAvatar}
-          />
         </div>
+        <HistoryContent
+          selectedHistoryItem={selectedHistoryItem}
+          selectedHistoryMessages={selectedHistoryMessages}
+          selectedHistoryIndex={selectedHistoryIndex}
+          coachAvatar={coachAvatar}
+          className={SESSION_TRANSCRIPT_COLUMN}
+        />
       </div>
     );
   }
 
+  const sdkConnected = conversation.status === "connected";
+  const isLive = phase === "active" && sdkConnected;
   const isActive = phase === "active" || phase === "ending";
   const isLoading = phase === "loading" || phase === "ending";
-  const heading = getSessionHeading(isActive, isLoading);
+  const canEndSession =
+    isLive ||
+    phase === "ending" ||
+    (Boolean(storedConversationId) &&
+      (phase === "active" || phase === "idle"));
+  const showStartButton =
+    phase === "idle" ||
+    phase === "loading" ||
+    (phase === "active" && !sdkConnected);
+  const heading = getSessionHeading(isLive, isLoading);
   const description = getSessionDescription(
-    isActive,
+    isLive,
     isLoading,
     conversation.isSpeaking,
     connectHint,
   );
-  const isConnected = conversation.status === "connected" || isActive;
+  const isConnected = sdkConnected;
   const liveStateLabel = isConnected
     ? conversation.isSpeaking
       ? "Connected · Coach speaking"
@@ -957,15 +1425,16 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+    <div className={SESSION_THREE_COLUMN_LAYOUT}>
       <HistorySidebar
         items={allHistoryItems}
         historyLoading={historyLoading}
         historyError={historyError}
         selectedHistoryId={effectiveSelectedHistoryId}
         onSelect={setSelectedHistoryId}
+        className={SESSION_HISTORY_COLUMN}
       />
-      <div className="space-y-5">
+      <div className={`${SESSION_COACH_COLUMN} space-y-5`}>
         <div className="relative overflow-hidden rounded-3xl p-[1px]">
           <div
             aria-hidden
@@ -1067,9 +1536,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
               avatar={coachAvatar}
               speaking={avatarIsSpeaking}
               blinking={avatarBlinking}
-              mouthLevel={avatarMouthLevel}
+              mouthLevel={avatarIsActive ? avatarMouthLevel : 0}
               gaze={avatarGaze}
-              headMotionClass={avatarHeadMotionClass}
+              headMotionClass={avatarIsActive ? avatarHeadMotionClass : "rotate-0 translate-y-0"}
               size="large"
             />
             <span
@@ -1112,17 +1581,18 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       </p>
 
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              {!isActive ? (
+              {showStartButton ? (
                 <button
                   type="button"
-                  onClick={startSession}
+                  onClick={() => void startSession()}
                   disabled={isLoading}
                   className="inline-flex items-center gap-2 rounded-xl bg-[#8b5cf6] px-6 py-3 text-sm font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#7c3aed] disabled:opacity-50"
                 >
                   <Mic className="h-4 w-4" />
                   {isLoading ? "Connecting…" : "Start Practicing Free"}
                 </button>
-              ) : (
+              ) : null}
+              {canEndSession ? (
                 <button
                   type="button"
                   onClick={() => void endSession(false)}
@@ -1132,17 +1602,80 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
                   <Square className="h-4 w-4" />
                   {phase === "ending" ? "Saving session…" : "End session"}
                 </button>
-              )}
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setShowMessages(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MessageSquareText className="h-4 w-4" />
+                View Messages {messages.length > 0 ? `(${messages.length})` : ""}
+              </button>
             </div>
           </div>
         </div>
-        <HistoryContent
-          selectedHistoryItem={selectedHistoryItem}
-          selectedHistoryMessages={selectedHistoryMessages}
-          selectedHistoryIndex={selectedHistoryIndex}
-          coachAvatar={coachAvatar}
-        />
+        {showMessages && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+            <div className="max-h-[80vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#111114] shadow-[0_0_40px_rgba(0,0,0,0.35)]">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+                <h3 className="text-lg font-semibold text-white">Live Messages</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowMessages(false)}
+                  className="rounded-md border border-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="max-h-[65vh] space-y-3 overflow-y-auto px-5 py-4">
+                {messages.length === 0 ? (
+                  <p className="text-sm text-[#9ca3af]">No messages yet for this session.</p>
+                ) : (
+                  messages.map((message, index) => (
+                    <div
+                      key={`${message.timestamp}-${index}`}
+                      className={`rounded-xl border px-4 py-3 ${
+                        message.role === "agent"
+                          ? "border-[#8b5cf6]/25 bg-[#8b5cf6]/10"
+                          : "border-white/10 bg-[#0b0b0d]"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+                            message.role === "agent"
+                              ? "border-[#8b5cf6]/45 bg-[#8b5cf6]/20 text-[#d8b4fe]"
+                              : "border-white/15 bg-white/10 text-white"
+                          }`}
+                        >
+                          {message.role === "agent" ? (
+                            <CoachFace avatar={coachAvatar} speaking={false} size="small" />
+                          ) : (
+                            <UserRound className="h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
+                            {message.role === "agent" ? coachAvatar.name : "You"}
+                          </p>
+                          <p className="mt-1 text-sm text-white">{message.text}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+      <HistoryContent
+        selectedHistoryItem={selectedHistoryItem}
+        selectedHistoryMessages={selectedHistoryMessages}
+        selectedHistoryIndex={selectedHistoryIndex}
+        coachAvatar={coachAvatar}
+        className={SESSION_TRANSCRIPT_COLUMN}
+      />
     </div>
   );
 }
@@ -1153,19 +1686,26 @@ function HistorySidebar({
   historyError,
   selectedHistoryId,
   onSelect,
+  className = "",
 }: {
   items: VoiceCoachHistoryItem[];
   historyLoading: boolean;
   historyError: string | null;
   selectedHistoryId: string | null;
   onSelect: (id: string) => void;
+  className?: string;
 }) {
   return (
-    <aside className="overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f]">
-      <div className="border-b border-white/10 px-4 py-3">
+    <aside
+      className={`overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f] ${className}`}
+    >
+      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
           Chat History
         </p>
+        <span className="rounded-full border border-[#8b5cf6]/35 bg-[#8b5cf6]/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#d8b4fe]">
+          New Chat
+        </span>
       </div>
       <div className="max-h-[74vh] space-y-2 overflow-y-auto p-3">
         {historyLoading && (
@@ -1190,11 +1730,17 @@ function HistorySidebar({
             onClick={() => onSelect(item.id)}
             className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
               selectedHistoryId === item.id
-                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/15"
+                ? "border-[#8b5cf6]/55 bg-[#8b5cf6]/20 shadow-[0_0_0_1px_rgba(139,92,246,0.35)]"
                 : "border-white/10 bg-[#111114] hover:bg-white/[0.04]"
             }`}
           >
-            <p className="text-xs text-[#9ca3af]">{item.mode}</p>
+            <p
+              className={`text-xs ${
+                selectedHistoryId === item.id ? "text-[#c4b5fd]" : "text-[#9ca3af]"
+              }`}
+            >
+              {item.mode}
+            </p>
             <p className="mt-1 text-sm font-medium text-white">
               {formatConversationTitle(item, index)}
             </p>
@@ -1210,27 +1756,31 @@ function HistoryContent({
   selectedHistoryMessages,
   selectedHistoryIndex,
   coachAvatar,
+  className = "",
 }: {
   selectedHistoryItem: VoiceCoachHistoryItem | null;
   selectedHistoryMessages: ConversationMessage[];
   selectedHistoryIndex: number;
   coachAvatar: (typeof MODE_COACH_AVATAR)[VoiceCoachMode];
+  className?: string;
 }) {
   if (!selectedHistoryItem) {
     return null;
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#111114]">
-      <div className="border-b border-white/10 px-5 py-3">
-        <p className="text-sm font-semibold text-white">
+    <section
+      className={`flex max-h-[74vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111114] ${className}`}
+    >
+      <div className="shrink-0 border-b border-white/10 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
+          Transcript
+        </p>
+        <p className="mt-1 line-clamp-2 text-sm font-semibold text-white">
           {formatConversationTitle(selectedHistoryItem, Math.max(0, selectedHistoryIndex))}
         </p>
-        {selectedHistoryItem?.summary && (
-          <p className="mt-1 text-xs text-[#9ca3af]">{selectedHistoryItem.summary}</p>
-        )}
       </div>
-      <div className="max-h-[42vh] space-y-3 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {selectedHistoryMessages.length === 0 ? (
           <p className="text-sm text-[#9ca3af]">No transcript content found.</p>
         ) : (

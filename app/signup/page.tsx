@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import SignUpPage from '@/components/auth/sign-up-page'
 
 export const metadata: Metadata = {
@@ -8,5 +9,15 @@ export const metadata: Metadata = {
 }
 
 export default function SignUpRoute() {
-  return <SignUpPage />
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-[#050505] text-[#9ca3af]">
+          Loading…
+        </div>
+      }
+    >
+      <SignUpPage />
+    </Suspense>
+  )
 }

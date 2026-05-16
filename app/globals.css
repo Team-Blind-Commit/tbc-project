@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+@keyframes mode-card-pop {
+  0% {
+    transform: scale(0.96) translateY(0);
+  }
+  55% {
+    transform: scale(1.06) translateY(-6px);
+  }
+  100% {
+    transform: scale(1.03) translateY(-4px);
+  }
+}

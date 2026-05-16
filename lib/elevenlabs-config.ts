@@ -22,13 +22,19 @@ export function getElevenLabsAgentId(): string | undefined {
 
 import { parseElevenLabsErrorBody } from "@/lib/elevenlabs-errors";
 
+type ElevenLabsAuthResponse =
+  | { ok: true; value: string }
+  | {
+      ok: false;
+      status: number;
+      detail: string;
+      parsed: ReturnType<typeof parseElevenLabsErrorBody>;
+    };
+
 export async function fetchElevenLabsSignedUrl(
   agentId: string,
   apiKey: string,
-): Promise<
-  | { ok: true; signedUrl: string }
-  | { ok: false; status: number; detail: string; parsed: ReturnType<typeof parseElevenLabsErrorBody> }
-> {
+): Promise<ElevenLabsAuthResponse> {
   const response = await fetch(
     `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`,
     {
@@ -59,5 +65,42 @@ export async function fetchElevenLabsSignedUrl(
     };
   }
 
-  return { ok: true, signedUrl: data.signed_url };
+  return { ok: true, value: data.signed_url };
+}
+
+export async function fetchElevenLabsConversationToken(
+  agentId: string,
+  apiKey: string,
+): Promise<ElevenLabsAuthResponse> {
+  const response = await fetch(
+    `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${encodeURIComponent(agentId)}`,
+    {
+      headers: {
+        "xi-api-key": apiKey,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await response.text();
+    return {
+      ok: false,
+      status: response.status,
+      detail,
+      parsed: parseElevenLabsErrorBody(detail),
+    };
+  }
+
+  const data = (await response.json()) as { token: string };
+  if (!data?.token) {
+    const detail = "Missing token in ElevenLabs response";
+    return {
+      ok: false,
+      status: response.status || 502,
+      detail,
+      parsed: parseElevenLabsErrorBody(detail),
+    };
+  }
+
+  return { ok: true, value: data.token };
 }
