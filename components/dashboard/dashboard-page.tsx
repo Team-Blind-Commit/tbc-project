@@ -1,3 +1,4 @@
+import { ActionPointsPanel } from "./action-points-panel";
 import { BottomPanels } from "./bottom-panels";
 import { PracticeCards } from "./practice-cards";
 import { Sidebar } from "./sidebar";
@@ -19,6 +20,7 @@ export function DashboardPage() {
             <TopBar />
             <StatsRow />
             <PracticeCards />
+            <ActionPointsPanel />
             <BottomPanels />
           </div>
         </main>
