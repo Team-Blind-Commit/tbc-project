@@ -1,7 +1,13 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, useEffect } from "react";
 import { Check, Mic } from "lucide-react";
+import {
+  buildPostLoginPath,
+  persistAuthRedirect,
+} from "@/lib/auth-redirect";
+import { setStoredUserName } from "@/lib/voice-coach-client";
 
 const FEATURES = [
   "Real-time AI voice coaching — no typing, just talking",
@@ -34,14 +40,32 @@ function GoogleIcon() {
 
 export default function SignUpPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const nextPath = searchParams.get("next") ?? "/dashboard";
+  const modeParam = searchParams.get("mode");
 
-  function handleGetStarted(e: React.FormEvent) {
+  useEffect(() => {
+    persistAuthRedirect(nextPath, modeParam);
+  }, [nextPath, modeParam]);
+
+  function completeSignIn(name: string) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      setStoredUserName(trimmed);
+    }
+    const destination = buildPostLoginPath(nextPath, modeParam);
+    router.push(destination);
+  }
+
+  function handleGetStarted(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    router.push("/dashboard");
+    const form = e.currentTarget;
+    const nameInput = form.elements.namedItem("fullName") as HTMLInputElement;
+    completeSignIn(nameInput?.value ?? "Guest");
   }
 
   function handleGoogleSignIn() {
-    router.push("/dashboard");
+    completeSignIn("Guest");
   }
 
   return (
@@ -112,6 +136,7 @@ export default function SignUpPage() {
                 type="text"
                 autoComplete="name"
                 placeholder="Your name"
+                required
                 className="w-full rounded-lg border border-white/[0.08] bg-[#1a1a24] px-4 py-3 text-sm text-white placeholder:text-[#71717a] outline-none transition-colors focus:border-[#7c3aed]"
               />
             </div>
