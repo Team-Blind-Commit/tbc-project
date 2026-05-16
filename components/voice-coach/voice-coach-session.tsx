@@ -716,12 +716,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   }, []);
 
   useEffect(() => {
-    if (!avatarIsActive) {
-      setAvatarMouthLevel(0);
-      setAvatarHeadMotionClass("rotate-0 translate-y-0");
-      return;
-    }
-
     let cancelled = false;
     const listeningPoses = ["rotate-0 translate-y-0", "rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] translate-y-0"] as const;
     const speakingPoses = ["rotate-[1deg] -translate-y-[1px]", "rotate-[-1deg] -translate-y-[1px]", "rotate-0 -translate-y-[1px]"] as const;
@@ -733,7 +727,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         : 0;
       setAvatarMouthLevel(mouthFrame);
 
-      const poses = avatarIsSpeaking ? speakingPoses : listeningPoses;
+      const poses = avatarIsSpeaking
+        ? speakingPoses
+        : avatarIsActive
+          ? listeningPoses
+          : (["rotate-0 translate-y-0"] as const);
       setAvatarHeadMotionClass(poses[Math.floor(Math.random() * poses.length)]);
     }, avatarIsSpeaking ? 140 : 620);
 
@@ -1259,9 +1257,9 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
               avatar={coachAvatar}
               speaking={avatarIsSpeaking}
               blinking={avatarBlinking}
-              mouthLevel={avatarMouthLevel}
+              mouthLevel={avatarIsActive ? avatarMouthLevel : 0}
               gaze={avatarGaze}
-              headMotionClass={avatarHeadMotionClass}
+              headMotionClass={avatarIsActive ? avatarHeadMotionClass : "rotate-0 translate-y-0"}
               size="large"
             />
             <span

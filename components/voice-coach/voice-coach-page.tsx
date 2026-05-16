@@ -56,21 +56,19 @@ export function VoiceCoachPage() {
     [modeParam, coachParam],
   );
 
-  const [mounted, setMounted] = useState(false);
   const [pickedMode, setPickedMode] = useState<VoiceCoachMode | null>(null);
-  const [modeFromUrl, setModeFromUrl] = useState<VoiceCoachMode | null>(null);
-  const selectedMode = pickedMode ?? modeFromUrl;
+  const selectedMode = pickedMode ?? initialMode;
   const [userName, setUserName] = useState("Guest");
-  const showGuestBanner = mounted && isAnonymousVoiceCoachUser(userName);
+  const showGuestBanner = isAnonymousVoiceCoachUser(userName);
 
   useEffect(() => {
-    setMounted(true);
-    setModeFromUrl(initialMode);
-    setUserName(getOrCreateStoredUserName());
-  }, [initialMode]);
+    const timer = window.setTimeout(() => {
+      setUserName(getOrCreateStoredUserName());
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
-  const showOliviaPicker =
-    mounted && coachParam === "olivia" && !selectedMode;
+  const showOliviaPicker = coachParam === "olivia" && !selectedMode;
 
   return (
     <div
