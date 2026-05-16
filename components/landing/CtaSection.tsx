@@ -21,7 +21,7 @@ export function CtaSection() {
             prepared, confident, and ready.
           </p>
           <Link
-            href={buildLoginHref("/voice-coach", "Interview")}
+            href={buildLoginHref('/voice-coach', 'Interview')}
             className="mt-10 inline-block rounded-xl bg-[#8b5cf6] px-10 py-4 text-lg font-semibold text-white transition-colors hover:bg-[#7c3aed]"
           >
             Start Practicing Free
