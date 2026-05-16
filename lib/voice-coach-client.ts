@@ -16,7 +16,15 @@ function generateGuestIdentity(): string {
     return `${GUEST_PREFIX}${crypto.randomUUID()}`;
   }
 
-  const random = Math.random().toString(36).slice(2, 10);
+  let random = "";
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    random = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, 8);
+  }
+
   return `${GUEST_PREFIX}${Date.now().toString(36)}${random}`;
 }
 
