@@ -18,6 +18,7 @@ import {
 import {
   getOrCreateStoredUserName,
   getStoredUserName,
+  prepareMicrophoneForVoiceSession,
   voiceCoachHeaders,
 } from "@/lib/voice-coach-client";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
@@ -455,6 +456,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const conversationRef = useRef<ConversationHandle | null>(null);
   const isMountedRef = useRef(false);
   const connectionLockRef = useRef(false);
+  const inputDeviceIdRef = useRef<string | undefined>(undefined);
   const onConnectRef = useRef<() => void>(() => undefined);
   const onDisconnectRef = useRef<() => void>(() => undefined);
   const onMessageRef = useRef<(message: unknown) => void>(() => undefined);
@@ -756,7 +758,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
 
   onMessageRef.current = (message: unknown) => {
     if (!isMountedRef.current) return;
-    if (!isSdkConnected(conversationRef.current)) return;
 
     const normalized = normalizeConversationMessage(message);
     if (normalized) {
@@ -827,7 +828,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         try {
           await startSdkSession({
             agentId: publicPending.agentId,
-            connectionType: "websocket",
+            connectionType: "webrtc",
+            inputDeviceId: inputDeviceIdRef.current,
             ...publicPending.sessionOptions,
           });
         } catch (retryErr) {
@@ -865,6 +867,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   };
 
   const conversation = useConversation({
+    connectionDelay: {
+      android: 3_000,
+      ios: 0,
+      default: 400,
+    },
     onConnect: () => onConnectRef.current(),
     onDisconnect: () => onDisconnectRef.current(),
     onMessage: (message) => onMessageRef.current(message),
@@ -1041,7 +1048,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         return;
       }
 
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mic = await prepareMicrophoneForVoiceSession();
+      inputDeviceIdRef.current = mic.inputDeviceId;
 
       const res = await fetch(
         `/api/voice-coach/signed-url?mode=${encodeURIComponent(mode)}`,
@@ -1112,14 +1120,19 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       }
 
       pendingConnectRef.current = pending;
+      const sessionDevice = { inputDeviceId: inputDeviceIdRef.current };
       if (pending.authMode === "signed" && pending.signedUrl) {
         await startSdkSession({
           signedUrl: pending.signedUrl,
+          connectionType: "websocket",
+          ...sessionDevice,
           ...pending.sessionOptions,
         });
       } else if (pending.authMode === "public" && pending.agentId) {
         await startSdkSession({
           agentId: pending.agentId,
+          connectionType: "webrtc",
+          ...sessionDevice,
           ...pending.sessionOptions,
         });
       }
