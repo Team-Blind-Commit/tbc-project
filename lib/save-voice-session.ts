@@ -45,32 +45,43 @@ export async function saveVoiceSession(
 
   const sessionId = sessionRow.id as string;
 
-  const { error: memoryError } = await supabase.from("user_coach_memory").upsert(
-    {
+  const [memoryResult, taskResult] = await Promise.allSettled([
+    supabase.from("user_coach_memory").upsert(
+      {
+        user_name: input.userName,
+        memory_blob: input.summary.memoryBlob,
+        current_goal: input.summary.currentGoal,
+        difficulty: input.summary.difficulty,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_name" },
+    ),
+    supabase.from("action_points").insert({
       user_name: input.userName,
-      memory_blob: input.summary.memoryBlob,
-      current_goal: input.summary.currentGoal,
-      difficulty: input.summary.difficulty,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_name" },
-  );
+      session_id: sessionId,
+      mode: input.mode,
+      task: input.summary.task,
+      points: [input.summary.task],
+      completed: false,
+    }),
+  ]);
 
-  if (memoryError) {
-    console.error("[save-voice-session] memory upsert:", memoryError.message);
+  if (memoryResult.status === "fulfilled" && memoryResult.value.error) {
+    console.error(
+      "[save-voice-session] memory upsert:",
+      memoryResult.value.error.message,
+    );
+  } else if (memoryResult.status === "rejected") {
+    console.error("[save-voice-session] memory upsert:", memoryResult.reason);
   }
 
-  const { error: taskError } = await supabase.from("action_points").insert({
-    user_name: input.userName,
-    session_id: sessionId,
-    mode: input.mode,
-    task: input.summary.task,
-    points: [input.summary.task],
-    completed: false,
-  });
-
-  if (taskError) {
-    console.error("[save-voice-session] action_points insert:", taskError.message);
+  if (taskResult.status === "fulfilled" && taskResult.value.error) {
+    console.error(
+      "[save-voice-session] action_points insert:",
+      taskResult.value.error.message,
+    );
+  } else if (taskResult.status === "rejected") {
+    console.error("[save-voice-session] action_points insert:", taskResult.reason);
   }
 
   return { sessionId };

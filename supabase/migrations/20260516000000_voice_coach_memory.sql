@@ -32,3 +32,6 @@ CREATE INDEX IF NOT EXISTS idx_action_points_user_completed
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_feature
   ON sessions (user_name, feature, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_elevenlabs_conversation_id
+  ON sessions (elevenlabs_conversation_id);

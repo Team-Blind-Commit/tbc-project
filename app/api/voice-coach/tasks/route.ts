@@ -37,8 +37,19 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    if (!body.task_id) {
+    const taskId = body.task_id?.trim();
+    if (!taskId) {
       return NextResponse.json({ error: "task_id is required" }, { status: 400 });
+    }
+
+    if (
+      typeof body.completed !== "undefined" &&
+      typeof body.completed !== "boolean"
+    ) {
+      return NextResponse.json(
+        { error: "completed must be a boolean when provided" },
+        { status: 400 },
+      );
     }
 
     const supabase = getSupabase();
@@ -49,18 +60,24 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("action_points")
       .update({
         completed: body.completed ?? true,
         completed_at: body.completed !== false ? new Date().toISOString() : null,
       })
-      .eq("id", body.task_id)
-      .eq("user_name", userName);
+      .eq("id", taskId)
+      .eq("user_name", userName)
+      .select("id")
+      .limit(1);
 
     if (error) {
       console.error("[voice-coach/tasks] patch:", error.message);
       return NextResponse.json({ error: "Failed to update task" }, { status: 500 });
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
     return NextResponse.json({ ok: true });

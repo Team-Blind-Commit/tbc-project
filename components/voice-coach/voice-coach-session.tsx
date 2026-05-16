@@ -18,6 +18,13 @@ import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
 type AuthMode = "signed" | "public";
+type ConversationMessageRole = "user" | "agent";
+
+interface ConversationMessage {
+  role: ConversationMessageRole;
+  text: string;
+  timestamp: number;
+}
 
 interface PendingConnect {
   authMode: AuthMode;
@@ -30,6 +37,40 @@ interface PendingConnect {
 
 interface VoiceCoachSessionProps {
   mode: VoiceCoachMode;
+}
+
+function normalizeConversationMessage(message: unknown): ConversationMessage | null {
+  if (typeof message === "string") {
+    const text = message.trim();
+    if (!text) return null;
+    return { role: "agent", text, timestamp: Date.now() };
+  }
+
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  const payload = message as Record<string, unknown>;
+  const source = typeof payload.source === "string" ? payload.source.toLowerCase() : "";
+  const role: ConversationMessageRole =
+    source.includes("user") || source.includes("human") ? "user" : "agent";
+
+  const textCandidates = [
+    payload.message,
+    payload.text,
+    payload.transcript,
+    payload.content,
+  ];
+  const text = textCandidates.find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  );
+
+  if (!text) {
+    return null;
+  }
+
+  return { role, text: text.trim(), timestamp: Date.now() };
 }
 
 function HomeworkCard({ task, mode }: { task: string; mode: VoiceCoachMode }) {
@@ -61,6 +102,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [connectHint, setConnectHint] = useState<string | null>(null);
   const [task, setTask] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [showMessages, setShowMessages] = useState(false);
   const transcriptRef = useRef<string[]>([]);
   const startedAtRef = useRef<number>(0);
   const phaseRef = useRef<SessionPhase>("idle");
@@ -93,9 +136,22 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       });
     },
     onMessage: (message) => {
-      const text =
-        typeof message === "string" ? message : JSON.stringify(message);
-      transcriptRef.current.push(text);
+      const normalized = normalizeConversationMessage(message);
+      if (normalized) {
+        setMessages((current) => [...current, normalized]);
+        transcriptRef.current.push(`[${normalized.role}] ${normalized.text}`);
+        return;
+      }
+
+      const rawMessage: unknown = message;
+      const fallback = (
+        typeof rawMessage === "string"
+          ? rawMessage
+          : JSON.stringify(rawMessage ?? "")
+      ).trim();
+      if (fallback) {
+        transcriptRef.current.push(fallback);
+      }
     },
     onError: (message, context) => {
       console.error("[voice-coach] conversation error:", message, context);
@@ -186,6 +242,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     setPhase("loading");
     setTask(null);
     setSummary(null);
+    setMessages([]);
+    setShowMessages(false);
     transcriptRef.current = [];
 
     try {
@@ -298,6 +356,15 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     setConnectHint(null);
     setPhase("ending");
     const conversationId = getConversationId();
+    if (!conversationId) {
+      console.warn("[voice-coach] endSession skipped: missing conversation id");
+      safeEndConversation();
+      setError("No active conversation found. Start a new session and try again.");
+      phaseRef.current = "idle";
+      setPhase("idle");
+      return;
+    }
+
     safeEndConversation();
 
     const durationSeconds = Math.round(
@@ -361,7 +428,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
             setPhase("idle");
             setTask(null);
             setSummary(null);
+            setShowMessages(false);
           }}
+          onViewMessages={() => setShowMessages(true)}
+          canViewMessages={messages.length > 0}
         />
       </div>
     );
@@ -450,12 +520,62 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
             {phase === "ending" ? "Saving session…" : "End session"}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setShowMessages(true)}
+          disabled={messages.length === 0 || phase === "loading"}
+          className="rounded-xl border border-white/10 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/5 disabled:opacity-50"
+        >
+          View Messages {messages.length > 0 ? `(${messages.length})` : ""}
+        </button>
       </div>
+
+      {showMessages && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="max-h-[80vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#111114]">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <h3 className="text-lg font-semibold text-white">Conversation</h3>
+              <button
+                type="button"
+                onClick={() => setShowMessages(false)}
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/5"
+              >
+                Close
+              </button>
+            </div>
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto px-5 py-4">
+              {messages.length === 0 ? (
+                <p className="text-sm text-[#9ca3af]">No messages yet.</p>
+              ) : (
+                messages.map((message, index) => (
+                  <div
+                    key={`${message.timestamp}-${index}`}
+                    className="rounded-lg border border-white/10 bg-[#0b0b0d] px-4 py-3"
+                  >
+                    <p className="text-xs uppercase tracking-wide text-[#8b5cf6]">
+                      {message.role}
+                    </p>
+                    <p className="mt-1 text-sm text-white">{message.text}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function SessionActions({ onPracticeAgain }: { onPracticeAgain: () => void }) {
+function SessionActions({
+  onPracticeAgain,
+  onViewMessages,
+  canViewMessages,
+}: {
+  onPracticeAgain: () => void;
+  onViewMessages: () => void;
+  canViewMessages: boolean;
+}) {
   return (
     <div className="mt-8 flex flex-wrap gap-3">
       <button
@@ -464,6 +584,14 @@ function SessionActions({ onPracticeAgain }: { onPracticeAgain: () => void }) {
         className="rounded-xl bg-[#8b5cf6] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#7c3aed]"
       >
         Practice again
+      </button>
+      <button
+        type="button"
+        onClick={onViewMessages}
+        disabled={!canViewMessages}
+        className="rounded-xl border border-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/5 disabled:opacity-50"
+      >
+        View Messages
       </button>
       <Link
         href="/dashboard"

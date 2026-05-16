@@ -28,32 +28,59 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Valid mode is required" }, { status: 400 });
     }
 
-    if (!body.transcript?.trim()) {
+    const transcript = body.transcript?.trim();
+    if (!transcript) {
       return NextResponse.json(
         { error: "transcript is required" },
         { status: 400 },
       );
     }
 
-    const durationSeconds =
-      typeof body.duration_seconds === "number" && body.duration_seconds >= 0
-        ? body.duration_seconds
-        : 0;
+    if (
+      typeof body.duration_seconds !== "number" ||
+      !Number.isFinite(body.duration_seconds) ||
+      body.duration_seconds <= 0
+    ) {
+      return NextResponse.json(
+        { error: "duration_seconds must be greater than 0" },
+        { status: 400 },
+      );
+    }
 
-    const summary = await summarizeVoiceSession(body.mode, body.transcript);
+    const conversationId = body.conversation_id?.trim();
+    if (!conversationId) {
+      return NextResponse.json(
+        { error: "conversation_id is required" },
+        { status: 400 },
+      );
+    }
 
-    const { sessionId, error: saveError, skipped } = await saveVoiceSession({
-      userName,
-      mode: body.mode,
-      transcript: body.transcript,
-      durationSeconds,
-      conversationId: body.conversation_id,
-      summary,
-    });
+    const durationSeconds = Math.round(body.duration_seconds);
+
+    const summary = await summarizeVoiceSession(body.mode, transcript);
+
+    let saveResult:
+      | Awaited<ReturnType<typeof saveVoiceSession>>
+      | null = null;
+    try {
+      saveResult = await saveVoiceSession({
+        userName,
+        mode: body.mode,
+        transcript,
+        durationSeconds,
+        conversationId,
+        summary,
+      });
+    } catch (error) {
+      console.error("[voice-coach/end-session] save failed:", error);
+      return NextResponse.json({ error: "Database save failed" }, { status: 500 });
+    }
+
+    const { sessionId, error: saveError, skipped } = saveResult;
 
     if (saveError && !skipped) {
       return NextResponse.json(
-        { error: "Failed to save session", details: saveError },
+        { error: "Database save failed", details: saveError },
         { status: 500 },
       );
     }
