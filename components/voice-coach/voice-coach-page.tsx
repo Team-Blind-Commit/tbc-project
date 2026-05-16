@@ -27,17 +27,26 @@ export function VoiceCoachPage() {
     [modeParam, coachParam],
   );
 
+  const [mounted, setMounted] = useState(false);
   const [pickedMode, setPickedMode] = useState<VoiceCoachMode | null>(null);
-  const selectedMode = pickedMode ?? initialMode;
-  const [userName] = useState<string>(() => getStoredUserName() ?? "Guest");
+  const [modeFromUrl, setModeFromUrl] = useState<VoiceCoachMode | null>(null);
+  const selectedMode = pickedMode ?? modeFromUrl;
+  const [userName, setUserName] = useState("Guest");
+  const showGuestBanner = mounted && userName === "Guest";
 
   useEffect(() => {
-    if (!getStoredUserName()) {
-      setStoredUserName(userName);
+    setMounted(true);
+    setModeFromUrl(initialMode);
+    const stored = getStoredUserName();
+    if (stored) {
+      setUserName(stored);
+    } else {
+      setStoredUserName("Guest");
     }
-  }, [userName]);
+  }, [initialMode]);
 
-  const showOliviaPicker = coachParam === "olivia" && !initialMode;
+  const showOliviaPicker =
+    mounted && coachParam === "olivia" && !selectedMode;
 
   return (
     <div
@@ -61,7 +70,7 @@ export function VoiceCoachPage() {
           homework from past sessions.
         </p>
 
-        {userName === "Guest" && (
+        {showGuestBanner && (
           <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
             Practicing as Guest.{" "}
             <Link href="/login?next=/voice-coach" className="underline">

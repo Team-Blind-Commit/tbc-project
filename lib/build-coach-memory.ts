@@ -66,28 +66,34 @@ export async function fetchOpenHomework(
   const supabase = getSupabase();
   if (!supabase) return [];
 
-  const { data, error } = await supabase
-    .from("action_points")
-    .select("id, task, mode, created_at, points")
-    .eq("user_name", userName)
-    .eq("completed", false)
-    .order("created_at", { ascending: false })
-    .limit(5);
+  try {
+    const { data, error } = await supabase
+      .from("action_points")
+      .select("id, task, mode, created_at, points")
+      .eq("user_name", userName)
+      .eq("completed", false)
+      .order("created_at", { ascending: false })
+      .limit(5);
 
-  if (error) {
-    console.error("[build-coach-memory] fetch homework:", error.message);
+    if (error) {
+      console.error("[build-coach-memory] fetch homework:", error.message);
+      return [];
+    }
+
+    return (data ?? []).map((row) => ({
+      id: row.id as string,
+      task:
+        (row.task as string | null) ??
+        ((row.points as string[] | null)?.[0] ??
+          "Complete your last practice task"),
+      mode: row.mode as string | null,
+      created_at: row.created_at as string,
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[build-coach-memory] fetch homework:", message);
     return [];
   }
-
-  return (data ?? []).map((row) => ({
-    id: row.id as string,
-    task:
-      (row.task as string | null) ??
-      ((row.points as string[] | null)?.[0] ??
-        "Complete your last practice task"),
-    mode: row.mode as string | null,
-    created_at: row.created_at as string,
-  }));
 }
 
 export async function buildCoachMemory(
@@ -102,16 +108,21 @@ export async function buildCoachMemory(
   } | null = null;
 
   if (supabase) {
-    const { data, error } = await supabase
-      .from("user_coach_memory")
-      .select("memory_blob, current_goal, difficulty")
-      .eq("user_name", userName)
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from("user_coach_memory")
+        .select("memory_blob, current_goal, difficulty")
+        .eq("user_name", userName)
+        .maybeSingle();
 
-    if (error) {
-      console.error("[build-coach-memory] memory fetch:", error.message);
-    } else {
-      memoryRow = data;
+      if (error) {
+        console.error("[build-coach-memory] memory fetch:", error.message);
+      } else {
+        memoryRow = data;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[build-coach-memory] memory fetch:", message);
     }
   }
 

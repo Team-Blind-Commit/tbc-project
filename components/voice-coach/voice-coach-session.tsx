@@ -66,6 +66,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const phaseRef = useRef<SessionPhase>("idle");
   const pendingConnectRef = useRef<PendingConnect | null>(null);
   const negotiationRetriesRef = useRef(0);
+  const sessionStartedRef = useRef(false);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -75,12 +76,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     onConnect: () => {
       negotiationRetriesRef.current = 0;
       pendingConnectRef.current = null;
+      sessionStartedRef.current = true;
       setConnectHint(null);
       phaseRef.current = "active";
       setPhase("active");
       setError(null);
     },
     onDisconnect: () => {
+      sessionStartedRef.current = false;
       setPhase((current) => {
         if (current === "active") {
           phaseRef.current = "idle";
@@ -105,7 +108,15 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       ) {
         negotiationRetriesRef.current += 1;
         setNotice("Connection timed out — retrying once…");
-        conversation.endSession();
+        if (sessionStartedRef.current) {
+          try {
+            conversation.endSession();
+          } catch (err) {
+            console.warn("[voice-coach] endSession skipped:", err);
+          } finally {
+            sessionStartedRef.current = false;
+          }
+        }
         const pending = pendingConnectRef.current;
 
         window.setTimeout(() => {
@@ -137,6 +148,27 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     },
   });
 
+  const safeEndConversation = useCallback(() => {
+    if (!sessionStartedRef.current) return;
+    try {
+      conversation.endSession();
+    } catch (err) {
+      console.warn("[voice-coach] endSession skipped:", err);
+    } finally {
+      sessionStartedRef.current = false;
+    }
+  }, [conversation]);
+
+  const getConversationId = useCallback((): string | undefined => {
+    if (!sessionStartedRef.current) return undefined;
+    try {
+      return conversation.getId() || undefined;
+    } catch (err) {
+      console.warn("[voice-coach] getId skipped:", err);
+      return undefined;
+    }
+  }, [conversation]);
+
   const startSession = useCallback(async () => {
     let userName = getStoredUserName();
     if (!userName) {
@@ -149,6 +181,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     setConnectHint(null);
     negotiationRetriesRef.current = 0;
     pendingConnectRef.current = null;
+    sessionStartedRef.current = false;
     phaseRef.current = "loading";
     setPhase("loading");
     setTask(null);
@@ -237,6 +270,8 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     } catch (err) {
       console.error("[voice-coach] start failed:", err);
       pendingConnectRef.current = null;
+      sessionStartedRef.current = false;
+      safeEndConversation();
       setConnectHint(null);
       setError(
         formatVoiceCoachConnectionError(
@@ -247,17 +282,23 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       phaseRef.current = "idle";
       setPhase("idle");
     }
-  }, [conversation, mode]);
+  }, [conversation, mode, safeEndConversation]);
 
   const endSession = useCallback(async () => {
     const userName = getStoredUserName();
     if (!userName) return;
 
+    if (phaseRef.current !== "active" && !sessionStartedRef.current) {
+      console.warn("[voice-coach] endSession called with no active conversation");
+      return;
+    }
+
     pendingConnectRef.current = null;
     negotiationRetriesRef.current = 0;
     setConnectHint(null);
     setPhase("ending");
-    conversation.endSession();
+    const conversationId = getConversationId();
+    safeEndConversation();
 
     const durationSeconds = Math.round(
       (Date.now() - startedAtRef.current) / 1000,
@@ -278,7 +319,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           user_name: userName,
           transcript,
           duration_seconds: durationSeconds,
-          conversation_id: conversation.getId() || undefined,
+          conversation_id: conversationId,
         }),
       });
 
@@ -306,7 +347,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       phaseRef.current = "idle";
       setPhase("idle");
     }
-  }, [conversation, mode]);
+  }, [getConversationId, mode, safeEndConversation]);
 
   if (phase === "done") {
     return (
