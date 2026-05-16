@@ -1,21 +1,54 @@
 ---
-description: Voxen API routes — OpenAI/Groq, ElevenLabs, Supabase patterns
+description: API route patterns — ElevenLabs, OpenAI/Groq, Supabase, env vars
 globs: app/api/**/*.ts,lib/**/*.ts
 alwaysApply: false
 ---
 
 # API & Integration Patterns
 
+## API Route Template
+
+Every route must follow this structure:
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+
+    // Validate required fields
+    if (!body.requiredField) {
+      return NextResponse.json({ error: 'requiredField is required' }, { status: 400 })
+    }
+
+    // ... logic ...
+
+    return NextResponse.json({ result: data })
+  } catch (error) {
+    console.error('[route-name] error:', error)
+    return NextResponse.json({ error: 'Something went wrong' }, { status: 500 })
+  }
+}
+```
+
+- Always validate request body before using values
+- Always wrap in try/catch
+- Always return typed JSON responses with proper HTTP status codes
+- Log errors with a route identifier prefix
+
+---
+
 ## LLM — OpenAI primary, Groq silent fallback
 
 ```typescript
-async function getAnalysis(systemPrompt: string, transcript: string): Promise<string> {
+async function getAnalysis(systemPrompt: string, userContent: string): Promise<string> {
   try {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: transcript },
+        { role: 'user', content: userContent },
       ],
       max_tokens: 200,
     })
@@ -25,7 +58,7 @@ async function getAnalysis(systemPrompt: string, transcript: string): Promise<st
       model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: transcript },
+        { role: 'user', content: userContent },
       ],
     })
     return fallback.choices[0].message.content ?? ''
@@ -33,57 +66,58 @@ async function getAnalysis(systemPrompt: string, transcript: string): Promise<st
 }
 ```
 
-- Run three card analyses in parallel: `Promise.all([...])`
-- Keep feedback to 4–5 sentences (saves ElevenLabs TTS credits)
+- Run all three judge analyses in parallel: `await Promise.all([counter, grammarian, evaluator])`
+- Keep each feedback response to 4–5 sentences to conserve ElevenLabs TTS credits
 
-## ElevenLabs Speech-to-Text
+---
 
-- `POST https://api.elevenlabs.io/v1/speech-to-text`
-- Header: `xi-api-key: process.env.ELEVENLABS_API_KEY`
-- Body (FormData): `model_id=scribe_v1`, `file=(audio blob)`
-- Returns: `{ text: "transcript" }`
+## ElevenLabs — Speech to Text (STT)
 
-## ElevenLabs Text-to-Speech
-
-- `POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}`
-- Headers: `xi-api-key`, `Content-Type: application/json`, `Accept: audio/mpeg`
-- Body: `{ text, model_id: "eleven_multilingual_v2" }`
-- Return binary as `Response` with `Content-Type: audio/mpeg`
-
-## Voice IDs (do not change)
-
-| Role       | ID                     |
-|------------|------------------------|
-| counter    | `DODLEQrClDo8wCz460ld` |
-| grammarian | `AeRdCCKzvd23BpJoofzx` |
-| evaluator  | `EST9Ui6982FZPSi7gCHi` |
-
-## API route template
-
-```typescript
-import { NextRequest, NextResponse } from 'next/server'
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json()
-    if (!body.requiredField) {
-      return NextResponse.json({ error: 'requiredField is required' }, { status: 400 })
-    }
-    return NextResponse.json({ result: data })
-  } catch (error) {
-    console.error('[route-name] error:', error)
-    return NextResponse.json({ error: 'Something went wrong' }, { status: 500 })
-  }
-}
+```
+POST https://api.elevenlabs.io/v1/speech-to-text
+Header: xi-api-key: process.env.ELEVENLABS_API_KEY
+Body (FormData): model_id=scribe_v1, file=<audio blob>
+Response: { text: "transcript string" }
 ```
 
-## Supabase tables
+---
 
-**sessions:** `id`, `created_at`, `user_name`, `topic`, `duration_seconds`, `transcript`, `counter_feedback`, `grammarian_feedback`, `evaluator_feedback`, `evaluator_score` (int 0–10), `filler_word_count`
+## ElevenLabs — Text to Speech (TTS)
 
-**action_points:** `id`, `created_at`, `user_name`, `points` (text[]), `completed` (bool)
+```
+POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}
+Headers: xi-api-key, Content-Type: application/json, Accept: audio/mpeg
+Body: { text, model_id: "eleven_multilingual_v2" }
+Return: binary audio as Response with Content-Type: audio/mpeg
+```
 
-## Env (`.env.local`, never commit)
+### Judge Voice IDs — do not change
+
+| Judge      | Voice ID                 |
+|------------|--------------------------|
+| Counter    | `DODLEQrClDo8wCz460ld`  |
+| Grammarian | `AeRdCCKzvd23BpJoofzx`  |
+| Evaluator  | `EST9Ui6982FZPSi7gCHi`  |
+
+---
+
+## ElevenLabs — Conversational AI (Voice Coach)
+
+Used for the back-and-forth Voice Coach feature. The agent is configured server-side using the ElevenLabs SDK or REST API. The mode (Interview / Debate / Presentation / Impromptu) is passed as a system prompt parameter or agent config — never hardcoded per-mode.
+
+---
+
+## Supabase Schema
+
+**sessions table:** `id`, `created_at`, `user_name`, `topic`, `duration_seconds`, `transcript`, `counter_feedback`, `grammarian_feedback`, `evaluator_feedback`, `evaluator_score` (int 0–10), `filler_word_count`
+
+**action_points table:** `id`, `created_at`, `user_name`, `points` (text[]), `completed` (bool)
+
+---
+
+## Environment Variables
+
+These live in `.env.local` only — never commit this file.
 
 ```env
 ELEVENLABS_API_KEY=
@@ -92,3 +126,6 @@ GROQ_API_KEY=
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
+
+- `OPENAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY` — server-side only, never prefix with `NEXT_PUBLIC_`
+- `NEXT_PUBLIC_*` keys are safe for the client but still must not contain secrets

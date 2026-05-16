@@ -1,42 +1,48 @@
 ---
-description: Voxen UI standards and V0 → Cursor integration workflow
+description: UI standards — Tailwind theme, component states, accessibility basics
 globs: "**/*.tsx"
 alwaysApply: false
 ---
 
 # UI Standards
 
+## Theme
+
 - Background: `#0a0a0a` (near-black)
-- Accent: amber/gold `#f59e0b` — one accent, used consistently
-- Interactive components: four states — idle / loading / ready / active
-- Always show loading states
-- Mobile-first: stack cards below `768px`
-- Use Tailwind `transition` classes between states
-- Surface errors on screen, not only in console
+- Accent: amber/gold — `#f59e0b` / Tailwind `amber-500`
+- Use one accent color consistently; do not introduce new brand colors
+- Text hierarchy: white for headings, `gray-400` for secondary text
 
-## V0 + Cursor workflow
+## Component Rules
 
-**V0 (v0.dev):** Generate visual UI — cards, buttons, dashboards, landing pages, animations.
+- Functional components only — no class components
+- Use Tailwind utility classes for all styling
+- No inline `style=` props
+- No separate `.css` files beyond `app/globals.css`
+- Mobile-first layout — stack below `768px` using `md:` breakpoints
 
-**Cursor:** Wire logic — props, API calls, state, TypeScript types, audio recording, API routes, DB.
+## States
 
-1. Build UI in v0.dev → copy code → paste into component file in Cursor
-2. In Agent chat, specify real props and handlers, e.g.:
+Every interactive component must handle four states:
 
-```
-Connect this V0 component to real data:
-- Cards receive props: { counter, grammarian, evaluator } (AI feedback strings)
-- Play button onClick → playVoice(text, voiceId)
-- Loading when isAnalyzing is true
-- Voice IDs: counter=DODLEQrClDo8wCz460ld, grammarian=AeRdCCKzvd23BpJoofzx, evaluator=EST9Ui6982FZPSi7gCHi
-Add TypeScript props and wire handlers.
-```
+| State   | Behaviour                                  |
+|---------|--------------------------------------------|
+| idle    | Default, waiting for user action           |
+| loading | Spinner or skeleton, inputs disabled       |
+| ready   | Data available, user can act               |
+| active  | Recording, playing audio, speaking         |
 
-| Use V0 first              | Use Cursor directly      |
-|---------------------------|--------------------------|
-| Cards, buttons, dashboards| API routes               |
-| Visual / animated UI      | Supabase queries         |
-| Landing / onboarding      | Audio recording logic    |
-|                           | Error handling           |
+Use Tailwind `transition` and `duration-` classes between state changes.
 
-Do not ask Cursor to redesign components V0 already built — integrate only.
+## Errors and Feedback
+
+- Surface errors on screen — not just in the browser console
+- Use a visible error message component, not an alert()
+- Show loading indicators whenever an async operation is in progress
+
+## How to Build UI
+
+- Build components directly in Cursor using Tailwind to match the existing dark theme
+- Match the look and feel of what's already in `components/` — do not redesign existing components unless asked
+- If given a screenshot or description, build to match it without changing the theme or layout logic
+- Do not introduce new UI libraries (e.g. shadcn, MUI, Chakra) without team agreement

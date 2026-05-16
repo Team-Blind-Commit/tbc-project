@@ -1,46 +1,66 @@
 ---
-description: Voxen buildathon — product context, tech stack, security, folder ownership, git
+description: Core rules for the TBC project — stack, security, folder ownership, git
 alwaysApply: true
 ---
 
-# Voxen — AI Speech Coaching Platform
+# TBC — AI Speech Coaching Platform
 
-**Tagline:** Your AI-powered speaking coach. Practice. Improve. Speak with confidence.
+Two features:
 
-## What We're Building
+1. **Voice Coach** — Back-and-forth spoken conversation with an AI coach. User selects a mode: Interview, Debate, Presentation, or Impromptu Speech. Powered by ElevenLabs Conversational AI.
+2. **Speech Evaluator** — User picks a topic and a time limit, speaks, then receives scored audio feedback from three AI judges: Counter, Grammarian, and Evaluator.
 
-1. **Speech Evaluator** — User speaks; three expert AI voices return audio feedback.
-2. **Voice Coach** — Real-time spoken coaching via ElevenLabs Conversational AI.
+---
 
 ## Tech Stack
 
-- **Framework:** Next.js App Router — always `app/`, never `pages/`
-- **Language:** TypeScript only (`.ts` / `.tsx`)
-- **Styling:** Tailwind CSS only — no separate CSS files, no inline styles
-- **Database:** Supabase — `import { supabase } from '@/lib/supabase'`
-- **Primary LLM:** OpenAI GPT-4o — `import { openai } from '@/lib/openai'`
-- **Fallback LLM:** Groq `llama-3.3-70b-versatile` — `import { groq } from '@/lib/groq'` (catch blocks only)
-- **Voice:** ElevenLabs STT, TTS, and Conversational AI (voice-coach only)
-- **Deploy:** Vercel
+- **Framework:** Next.js App Router — always `app/` directory, never `pages/`
+- **Language:** TypeScript only — `.ts` and `.tsx` files only
+- **Styling:** Tailwind CSS — use utility classes, no separate `.css` files beyond `globals.css`, no inline `style=` props
+- **Primary LLM:** OpenAI GPT-4o via `import { openai } from '@/lib/openai'`
+- **Fallback LLM:** Groq `llama-3.3-70b-versatile` via `import { groq } from '@/lib/groq'` — only used in `catch` blocks
+- **Voice:** ElevenLabs STT, TTS, and Conversational AI
+- **Deploy:** Vercel — keep build clean and passing at all times
 
-Do not add a user-facing model selector. Use GPT-4o by default; mention swappable architecture in the pitch only.
+Do not add a model selector to the UI. GPT-4o is the default; Groq is the silent fallback.
 
-## Security (never break)
+---
 
-- `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `GROQ_API_KEY` are server-side only — only in `app/api/` routes
-- `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are safe client-side
-- Never `console.log` keys or tokens
-- Validate request body fields in every API route before use
+## Security — never break these
+
+- `OPENAI_API_KEY`, `GROQ_API_KEY`, and `ELEVENLABS_API_KEY` are **server-side only**
+  - Only access them inside `app/api/` route handlers
+  - Never import or reference them in client components or `app/` pages
+  - Never `console.log` any key, token, or secret
+- `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are safe on the client
+- Validate every incoming request body field in API routes before using it
+- Always wrap external API calls in `try/catch` and return proper error responses
+- Never hardcode API keys or secrets anywhere in the codebase
+
+---
 
 ## Folder Ownership
 
-**Team A (speech evaluator):** `app/speech-eval/**`, `app/api/analyze/**`, `app/api/speak/**`, `app/api/generate-topic/**`
+Each subteam owns their folder. Do not edit another team's folder without coordination.
 
-**Team B (voice coach):** `app/voice-coach/**`, `app/api/voice-coach/**`
+**Voice Coach team:** `app/voice-coach/**`, `app/api/voice-coach/**`
 
-**Shared (coordinate first):** `app/layout.tsx`, `app/page.tsx`, `app/dashboard/**`, `app/api/save-session/**`, `lib/**`
+**Speech Evaluator team:** `app/speech-eval/**`, `app/api/analyze/**`, `app/api/speak/**`, `app/api/generate-topic/**`
 
-## Shared Clients — import, never reinitialize
+**Shared — coordinate before changing:**
+- `app/layout.tsx`
+- `app/page.tsx`
+- `app/dashboard/**`
+- `app/api/save-session/**`
+- `lib/**`
+- `components/landing/**`
+- `components/dashboard/**`
+
+If you need a new shared `lib/` file or a new package, coordinate with the team first.
+
+---
+
+## Shared Clients — always import, never reinitialize
 
 ```typescript
 import { supabase } from '@/lib/supabase'
@@ -48,20 +68,26 @@ import { openai } from '@/lib/openai'
 import { groq } from '@/lib/groq'
 ```
 
+Do not create new instances of these clients in feature files.
+
+---
+
 ## Git
 
 - Never commit directly to `dev` or `main`
-- Branch: `feature/yourname-description`
-- Commits: `feat: …`, `fix: …`, `style: …`
-- PR to `dev` when a feature chunk works end-to-end
-- `git pull origin dev` before new work
+- Branch naming: `feature/yourname-description`
+- Commit messages: `feat: …`, `fix: …`, `style: …`, `chore: …`
+- PR into `dev` once a feature chunk works end-to-end
+- Always `git pull origin dev` before starting new work
 
-## Do Not
+---
 
-- Call OpenAI or ElevenLabs from client components
-- Create new `lib/` files without team agreement
-- Change `layout.tsx` or install packages without team agreement
-- Hardcode API keys
-- Skip try/catch on API calls
-- Leave TODOs in submitted code
-- Redesign V0-pasted UI in Cursor — integrate only
+## Hard Rules
+
+- No OpenAI or ElevenLabs calls from client components — API routes only
+- No hardcoded secrets anywhere
+- No `any` type without a comment explaining why
+- No empty `catch` blocks — log the error and return a proper response
+- No leftover `TODO` comments in submitted code
+- Do not redesign or refactor UI components unless explicitly asked
+- Do not install new packages without team agreement
