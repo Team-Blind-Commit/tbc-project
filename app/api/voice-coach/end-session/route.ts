@@ -3,6 +3,7 @@ import { saveVoiceSession } from "@/lib/save-voice-session";
 import { summarizeVoiceSession } from "@/lib/summarize-voice-session";
 import { requireUser } from "@/lib/supabase/require-user";
 import { isVoiceCoachMode } from "@/lib/voice-coach-modes";
+import { parseVoiceCoachSessionMessages } from "@/lib/voice-coach-session-messages";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,7 @@ export async function POST(request: NextRequest) {
       transcript?: string;
       duration_seconds?: number;
       conversation_id?: string;
+      messages?: unknown;
     };
 
     if (!body.mode || !isVoiceCoachMode(body.mode)) {
@@ -47,6 +49,14 @@ export async function POST(request: NextRequest) {
 
     const durationSeconds = Math.round(body.duration_seconds);
 
+    const parsedMessages = parseVoiceCoachSessionMessages(body.messages);
+    if (parsedMessages === null) {
+      return NextResponse.json(
+        { error: "messages must be a valid array of chat turns" },
+        { status: 400 },
+      );
+    }
+
     const summary = await summarizeVoiceSession(body.mode, transcript);
 
     let saveResult:
@@ -60,6 +70,7 @@ export async function POST(request: NextRequest) {
         durationSeconds,
         conversationId,
         summary,
+        messages: parsedMessages.length > 0 ? parsedMessages : undefined,
       });
     } catch (error) {
       console.error("[voice-coach/end-session] save failed:", error);

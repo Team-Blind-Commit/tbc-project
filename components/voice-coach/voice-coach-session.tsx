@@ -39,6 +39,7 @@ interface VoiceCoachHistoryItem {
   summary: string | null;
   task: string | null;
   transcript: string;
+  messages?: ConversationMessage[];
   createdAt: string | null;
   durationSeconds: number | null;
 }
@@ -578,6 +579,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       summary: null,
       task: null,
       transcript,
+      messages,
       createdAt: null,
       durationSeconds: null,
     } satisfies VoiceCoachHistoryItem;
@@ -598,13 +600,16 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     [allHistoryItems, effectiveSelectedHistoryId],
   );
 
-  const selectedHistoryMessages = useMemo(
-    () =>
-      selectedHistoryItem
-        ? normalizeTranscriptLines(selectedHistoryItem.transcript)
-        : [],
-    [selectedHistoryItem],
-  );
+  const selectedHistoryMessages = useMemo(() => {
+    if (!selectedHistoryItem) return [];
+    if (selectedHistoryItem.id === "__current__") {
+      return messages.filter((message) => message.text.trim().length > 0);
+    }
+    if (selectedHistoryItem.messages && selectedHistoryItem.messages.length > 0) {
+      return selectedHistoryItem.messages;
+    }
+    return normalizeTranscriptLines(selectedHistoryItem.transcript);
+  }, [selectedHistoryItem, messages]);
   const selectedHistoryIndex = selectedHistoryItem
     ? allHistoryItems.findIndex((item) => item.id === selectedHistoryItem.id)
     : -1;
@@ -1289,6 +1294,13 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           transcript,
           duration_seconds: durationSeconds,
           conversation_id: conversationId,
+          messages: messages
+            .filter((message) => message.text.trim().length > 0)
+            .map((message) => ({
+              role: message.role,
+              text: message.text,
+              timestamp: message.timestamp,
+            })),
         }),
       });
 
@@ -1335,7 +1347,14 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         isStartingRef.current = false;
       }
     }
-  }, [conversation, getConversationId, loadHistory, mode, storedConversationId]);
+  }, [
+    conversation,
+    getConversationId,
+    loadHistory,
+    messages,
+    mode,
+    storedConversationId,
+  ]);
 
   const coachAvatar = MODE_COACH_AVATAR[mode];
 

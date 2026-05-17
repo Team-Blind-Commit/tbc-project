@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/supabase/require-user";
+import { mapDbSessionMessages } from "@/lib/voice-coach-session-messages";
+
+interface SessionMessageRow {
+  role: string;
+  content: string;
+  sequence_index: number;
+  spoke_at: string;
+}
 
 interface SessionRow {
   id: string;
@@ -10,6 +18,13 @@ interface SessionRow {
   transcript: string | null;
   created_at: string | null;
   duration_seconds: number | null;
+  session_messages: SessionMessageRow[] | null;
+}
+
+interface VoiceCoachHistoryMessage {
+  role: "user" | "agent";
+  text: string;
+  timestamp: number;
 }
 
 interface VoiceCoachHistoryItem {
@@ -19,6 +34,7 @@ interface VoiceCoachHistoryItem {
   summary: string | null;
   task: string | null;
   transcript: string;
+  messages: VoiceCoachHistoryMessage[];
   createdAt: string | null;
   durationSeconds: number | null;
 }
@@ -49,6 +65,7 @@ function buildSessionTitle(session: SessionRow): string {
 
 function mapHistoryItem(session: SessionRow): VoiceCoachHistoryItem {
   const latestTask = session.action_points?.[0]?.task?.trim() ?? null;
+  const messages = mapDbSessionMessages(session.session_messages);
   return {
     id: session.id,
     title: buildSessionTitle(session),
@@ -56,6 +73,7 @@ function mapHistoryItem(session: SessionRow): VoiceCoachHistoryItem {
     summary: session.summary,
     task: latestTask || null,
     transcript: session.transcript?.trim() ?? "",
+    messages,
     createdAt: session.created_at,
     durationSeconds: session.duration_seconds,
   };
@@ -70,7 +88,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("sessions")
       .select(
-        "id, mode, summary, transcript, created_at, duration_seconds, feature, action_points(task, created_at)",
+        "id, mode, summary, transcript, created_at, duration_seconds, feature, action_points(task, created_at), session_messages(role, content, sequence_index, spoke_at)",
       )
       .eq("user_id", user.id)
       .eq("feature", "voice_coach")

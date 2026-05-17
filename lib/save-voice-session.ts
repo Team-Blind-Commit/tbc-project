@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { VoiceSessionSummary } from "@/lib/summarize-voice-session";
 import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
+import type { VoiceCoachSessionMessageInput } from "@/lib/voice-coach-session-messages";
 
 export interface SaveVoiceSessionInput {
   userId: string;
@@ -9,6 +10,7 @@ export interface SaveVoiceSessionInput {
   durationSeconds: number;
   conversationId?: string;
   summary: VoiceSessionSummary;
+  messages?: VoiceCoachSessionMessageInput[];
 }
 
 export async function saveVoiceSession(
@@ -39,6 +41,28 @@ export async function saveVoiceSession(
   }
 
   const sessionId = sessionRow.id as string;
+
+  if (input.messages && input.messages.length > 0) {
+    const messageRows = input.messages.map((message, index) => ({
+      session_id: sessionId,
+      user_id: input.userId,
+      role: message.role,
+      content: message.text.slice(0, 10_000),
+      sequence_index: index,
+      spoke_at: new Date(message.timestamp).toISOString(),
+    }));
+
+    const { error: messagesError } = await supabase
+      .from("session_messages")
+      .insert(messageRows);
+
+    if (messagesError) {
+      console.error(
+        "[save-voice-session] session_messages insert:",
+        messagesError.message,
+      );
+    }
+  }
 
   const [memoryResult, taskResult] = await Promise.allSettled([
     supabase.from("user_coach_memory").upsert(
