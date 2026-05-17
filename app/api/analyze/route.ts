@@ -7,29 +7,39 @@ import { requireUser } from "@/lib/supabase/require-user";
 import { resolveFillerWordCount } from "@/lib/filler-words";
 import { assessTranscriptQuality } from "@/lib/transcript-quality";
 
-const JUDGE_VOICE_RULES = `Speak in first person to the speaker, like a supportive coach at a club meeting — warm, specific, never dismissive. This will be read aloud via text-to-speech, so use natural spoken sentences (no bullet lists, no markdown). Aim for 5–7 sentences; stay under ~110 words so it stays listenable.`;
+const JUDGE_VOICE_RULES = `Speak in first person to the speaker, like a supportive coach at a club meeting — warm, specific, never dismissive. This will be read aloud via text-to-speech, so use natural spoken sentences (no bullet lists, no markdown). Aim for 5–7 sentences; stay under ~110 words so it stays listenable.
+
+Never open with empty encouragement ("Great start!", "Good start", "You're doing great", "I look forward to hearing more") unless the very next words name something specific from their transcript. Each judge on the panel has a different job — do not sound like the others.`;
 
 const COUNTER_SYSTEM = `You are Rex, an enthusiastic filler-word specialist at a speech club.
 
+OPENING: Lead with filler count or delivery rhythm (e.g. "I counted two ums…" or "Your pace stayed steady"). Do not open with generic praise.
+
 Count fillers in the transcript: um, uh, like, you know, basically, literally, actually, right, okay, so. Name each filler you heard with its count and give a total. Comment on whether fillers clustered anywhere. Give one practical tip to reduce them (e.g. pause instead of "um").
 
-If the session context says the speech was SHORT, say so kindly — you need more speech to judge patterns well — and suggest they try again for ~45–60 seconds while still noting what you heard this time.
+If the session context says the speech was SHORT, mention you need more audio to spot filler habits — suggest ~45–60 seconds next time — but still report what you heard this time. Do not repeat Marcus's structure advice or Clara's grammar focus.
 
 ${JUDGE_VOICE_RULES}`;
 
 const GRAMMARIAN_SYSTEM = `You are Clara, a warm and precise grammar coach at a speech club.
 
+OPENING: Lead with a specific wording win from their transcript (quote a short phrase they used well) OR your first grammar observation — never a vague "great start".
+
 Find 1–3 specific grammar or phrasing issues. Quote the exact phrase from their transcript, then give a clearer way to say it. Highlight at least one thing they did well with their wording.
 
-If the speech was SHORT, acknowledge you only have a little to work with, encourage a longer practice round, and still give useful feedback on what they did say (don't invent problems that aren't in the transcript).
+If the speech was SHORT, say you only have a short sample, suggest one longer practice round, and still comment on real wording from the transcript (don't invent problems). Do not repeat Rex's filler coaching or Marcus's structure scoring.
 
 ${JUDGE_VOICE_RULES}`;
 
 const EVALUATOR_SYSTEM = `You are Marcus, an inspiring speech coach at a speech club.
 
+OPENING: Lead with your score out of 10 or the clearest structural moment you noticed (hook, main point, close) — not generic encouragement.
+
 Evaluate their practice on the topic: clarity, structure (opening / points / close), vocabulary, and how well they stayed on topic. Give an honest score out of 10 in a natural way (e.g. "I'd give you a 6 out of 10"). Offer 2 concrete tips for next time.
 
-If the speech was SHORT, acknowledge it without being harsh — explain that a fuller ~45–60 second try will let you judge structure better — and suggest what to add next time (e.g. a hook, two supporting points, a closing line). Still score and encourage based on what they delivered.
+Your feedback will be read aloud — sound like a real coach after a meeting: use contractions, short sentences, and a warm tone. Never sound like a TV ad, trailer, or corporate narrator.
+
+If the speech was SHORT, note that structure is hard to judge yet, suggest what to add on a ~45–60 second retry (hook, two points, closing line), and still score based on what they delivered. Do not repeat Rex's filler count or Clara's grammar quotes.
 
 ${JUDGE_VOICE_RULES}`;
 
@@ -50,11 +60,14 @@ function getSpeechLength(
   return "full";
 }
 
+type JudgeRole = "counter" | "grammarian" | "evaluator";
+
 function buildJudgeUserContent(
   topic: string,
   transcript: string,
   durationSeconds: number,
   speechWordCount: number,
+  role: JudgeRole,
 ): string {
   const length = getSpeechLength(speechWordCount, durationSeconds);
   const durationLine =
@@ -63,19 +76,31 @@ function buildJudgeUserContent(
       : "Recording duration: (not reported)";
 
   const lengthLines: Record<SpeechLength, string> = {
-    brief: `Session length: SHORT (about ${speechWordCount} words). This was only a quick attempt — judges should acknowledge that and encourage a fuller ~45–60 second practice while still giving real feedback.`,
+    brief: `Session length: SHORT (about ${speechWordCount} words). Quick attempt only.`,
     moderate: `Session length: MODERATE (about ${speechWordCount} words). Room to develop ideas further on a longer take.`,
     full: `Session length: FULL enough for a solid practice (about ${speechWordCount} words).`,
   };
 
-  return [
+  const roleBriefNotes: Record<JudgeRole, string> = {
+    counter:
+      "Stay in your lane: filler count and pacing only. If short, say you need more speech to judge habits — do not give structure or grammar lectures.",
+    grammarian:
+      "Stay in your lane: quote their wording. If short, praise or fix one real phrase from the transcript — do not open with generic cheerleading.",
+    evaluator:
+      "Stay in your lane: score, topic fit, and structure. If short, say what to add on a longer take (hook, points, close) — do not repeat filler or grammar advice.",
+  };
+
+  const lines = [
     `Topic: ${topic}`,
     durationLine,
     lengthLines[length],
+    ...(length === "brief" ? ["", roleBriefNotes[role]] : []),
     "",
     "Speech transcript:",
     transcript,
-  ].join("\n");
+  ];
+
+  return lines.join("\n");
 }
 
 async function getJudgeFeedback(
@@ -123,6 +148,36 @@ function extractScore(evaluatorFeedback: string): number | null {
   }
 
   return null;
+}
+
+function formatSaveWarning(message: string, code?: string): string {
+  const lower = message.toLowerCase();
+
+  if (lower.includes("permission denied for schema public")) {
+    return "Couldn't save to your account (database permissions). In Supabase SQL Editor, grant access on schema public for the authenticated role, or ask your team admin. Feedback is saved on this device.";
+  }
+
+  if (
+    lower.includes("row-level security") ||
+    lower.includes("permission denied") ||
+    code === "42501"
+  ) {
+    return "Couldn't save to your account (permissions). Your feedback is still here and on this device. Try signing out/in, or apply Supabase RLS migrations.";
+  }
+
+  if (
+    lower.includes("column") ||
+    lower.includes("schema") ||
+    lower.includes("does not exist")
+  ) {
+    return "Couldn't save to your account (database schema). Run supabase/migrations on your Supabase project. Feedback is saved on this device.";
+  }
+
+  if (lower.includes("null value") && lower.includes("user_name")) {
+    return "Couldn't save to your account (profile setup). Complete your username in signup/settings. Feedback is saved on this device.";
+  }
+
+  return "Couldn't save to your account right now. Feedback is saved on this device — check History below.";
 }
 
 async function transcribeWithElevenLabs(audio: Blob): Promise<string | null> {
@@ -251,17 +306,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userContent = buildJudgeUserContent(
-      topicStr,
+    const judgeInput = {
+      topic: topicStr,
       transcript,
       durationSeconds,
-      quality.speechWordCount,
-    );
+      speechWordCount: quality.speechWordCount,
+    };
 
     const [counter, grammarian, evaluator] = await Promise.all([
-      getJudgeFeedback(COUNTER_SYSTEM, userContent),
-      getJudgeFeedback(GRAMMARIAN_SYSTEM, userContent),
-      getJudgeFeedback(EVALUATOR_SYSTEM, userContent),
+      getJudgeFeedback(
+        COUNTER_SYSTEM,
+        buildJudgeUserContent(
+          judgeInput.topic,
+          judgeInput.transcript,
+          judgeInput.durationSeconds,
+          judgeInput.speechWordCount,
+          "counter",
+        ),
+      ),
+      getJudgeFeedback(
+        GRAMMARIAN_SYSTEM,
+        buildJudgeUserContent(
+          judgeInput.topic,
+          judgeInput.transcript,
+          judgeInput.durationSeconds,
+          judgeInput.speechWordCount,
+          "grammarian",
+        ),
+      ),
+      getJudgeFeedback(
+        EVALUATOR_SYSTEM,
+        buildJudgeUserContent(
+          judgeInput.topic,
+          judgeInput.transcript,
+          judgeInput.durationSeconds,
+          judgeInput.speechWordCount,
+          "evaluator",
+        ),
+      ),
     ]);
 
     if (
@@ -286,27 +368,57 @@ export async function POST(request: NextRequest) {
     let saveWarning: string | undefined;
 
     const supabase = await createClient();
-    const { data: sessionRow, error: saveError } = await supabase
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("username")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const sessionPayload: Record<string, unknown> = {
+      user_id: user.id,
+      topic: topicStr,
+      feature: "speech_eval",
+      duration_seconds: durationSeconds,
+      transcript,
+      counter_feedback: counter,
+      grammarian_feedback: grammarian,
+      evaluator_feedback: evaluator,
+      filler_word_count: fillerWordCount,
+      ...(profile?.username ? { user_name: profile.username } : {}),
+      ...(evaluatorScore !== null ? { evaluator_score: evaluatorScore } : {}),
+    };
+
+    let { data: sessionRow, error: saveError } = await supabase
       .from("sessions")
-      .insert({
-        user_id: user.id,
-        topic: topicStr,
-        feature: "speech_eval",
-        duration_seconds: durationSeconds,
-        transcript,
-        counter_feedback: counter,
-        grammarian_feedback: grammarian,
-        evaluator_feedback: evaluator,
-        filler_word_count: fillerWordCount,
-        ...(evaluatorScore !== null ? { evaluator_score: evaluatorScore } : {}),
-      })
+      .insert(sessionPayload)
       .select("id")
       .single();
 
+    if (
+      saveError &&
+      evaluatorScore !== null &&
+      (saveError.message.includes("evaluator_score") ||
+        saveError.message.includes("column"))
+    ) {
+      const { evaluator_score: _removed, ...withoutScore } = sessionPayload;
+      void _removed;
+      const retry = await supabase
+        .from("sessions")
+        .insert(withoutScore)
+        .select("id")
+        .single();
+      sessionRow = retry.data;
+      saveError = retry.error;
+    }
+
     if (saveError) {
-      console.error("[analyze] save session error:", saveError.message);
-      saveWarning =
-        "Feedback is ready, but saving to your account history failed. Try again later.";
+      console.error(
+        "[analyze] save session error:",
+        saveError.message,
+        saveError.code,
+      );
+      saveWarning = formatSaveWarning(saveError.message, saveError.code);
     } else {
       persisted = true;
       sessionId = (sessionRow?.id as string | undefined) ?? null;

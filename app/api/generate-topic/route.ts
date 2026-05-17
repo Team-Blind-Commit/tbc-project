@@ -57,9 +57,19 @@ export async function POST(request: NextRequest) {
     if (rateLimited) return rateLimited;
 
     let userInput: string | undefined;
+    let regenerate = false;
+    let previousTopic: string | undefined;
 
     try {
-      const body = (await request.json()) as { userInput?: string };
+      const body = (await request.json()) as {
+        userInput?: string;
+        regenerate?: boolean;
+        previousTopic?: string;
+      };
+      if (body.regenerate === true) regenerate = true;
+      if (body.previousTopic && typeof body.previousTopic === "string") {
+        previousTopic = body.previousTopic.trim().slice(0, 200) || undefined;
+      }
       if (body.userInput && typeof body.userInput === "string") {
         const trimmed = body.userInput.trim();
         if (trimmed.length > MAX_TOPIC_INPUT_LENGTH) {
@@ -74,9 +84,19 @@ export async function POST(request: NextRequest) {
       // Empty body is fine — generate a fresh topic
     }
 
-    const userMessage =
-      userInput ??
-      "Generate a random engaging speech topic";
+    const userMessage = regenerate
+      ? [
+          "Generate a completely NEW and different engaging speech topic.",
+          previousTopic
+            ? `Do NOT repeat or closely paraphrase this previous topic: "${previousTopic}".`
+            : "Pick something fresh — avoid generic staples like 'public speaking' or 'leadership' unless you twist them uniquely.",
+          userInput
+            ? `Optional theme hint from the speaker (use only as loose inspiration): ${userInput}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : (userInput ?? "Generate a random engaging speech topic");
 
     const raw = await generateTopic(userMessage);
     const { topic, suggestion } = parseTopicJson(raw);
