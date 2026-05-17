@@ -21,7 +21,7 @@ export function PracticeCards() {
       <h2 className="text-lg font-bold text-white">Choose your practice</h2>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <article className="flex min-h-[320px] flex-col rounded-xl border border-white/[0.06] bg-[#1a1a24] p-8">
+        <article className="flex min-h-[320px] flex-col rounded-xl border border-white/[0.06] bg-[#1a1a24] p-8 transition-all duration-200 hover:scale-[1.02] hover:border-[#8b5cf6]/50 hover:shadow-[0_0_24px_rgba(139,92,246,0.2)]">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#8b5cf6]/15">
             <Mic className="h-5 w-5 text-[#8b5cf6]" strokeWidth={2} />
           </div>
