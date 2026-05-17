@@ -12,6 +12,12 @@
 
 Apply migrations in `supabase/migrations/` on your Supabase project (Dashboard SQL or CLI), in filename order, before expecting voice history to persist.
 
+**Deploy checklist (shared Supabase):**
+
+1. Run every file in `supabase/migrations/` in order (or `supabase/all_migrations.sql` once on a fresh project).
+2. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` on the host (Vercel/etc.) — anon key must be the JWT (`eyJ...`), not `sb_publishable_...`.
+3. After deploy, confirm a speech eval and voice coach end-session create rows in `sessions` for the signed-in user.
+
 ## Product → `sessions.feature`
 
 | Product | Route | `feature` | Other tables |
