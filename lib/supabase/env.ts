@@ -14,5 +14,11 @@ export function getSupabasePublicEnv(): { url: string; anonKey: string } {
     )
   }
 
+  if (anonKey.startsWith('sb_publishable_')) {
+    throw new Error(
+      'Invalid NEXT_PUBLIC_SUPABASE_ANON_KEY: use the anon public key from Supabase Dashboard (JWT starting with eyJ), not a publishable key.'
+    )
+  }
+
   return { url, anonKey }
 }
