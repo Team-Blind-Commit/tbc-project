@@ -1,10 +1,10 @@
 import { Flame } from "lucide-react";
 
 type TopBarProps = {
-  name?: string;
-  sessionsThisWeek?: number;
-  streakDays?: number;
-  initials?: string;
+  name: string;
+  sessionsThisWeek: number;
+  streakDays: number;
+  initials: string;
 };
 
 function getGreeting(): string {
@@ -15,10 +15,10 @@ function getGreeting(): string {
 }
 
 export function TopBar({
-  name = "Alex",
-  sessionsThisWeek = 3,
-  streakDays = 7,
-  initials = "A",
+  name,
+  sessionsThisWeek,
+  streakDays,
+  initials,
 }: TopBarProps) {
   return (
     <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   History,
   LayoutDashboard,
@@ -9,6 +10,7 @@ import {
   Mic,
   Settings,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -18,6 +20,23 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("[logout]", error.message);
+      setIsLoggingOut(false);
+      return;
+    }
+
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="hidden w-56 shrink-0 flex-col border-r border-white/[0.06] bg-[#050505] px-4 py-6 lg:flex">
@@ -53,10 +72,12 @@ export function Sidebar() {
 
       <button
         type="button"
-        className="mt-auto flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[#9ca3af] transition-colors hover:bg-white/[0.04] hover:text-white"
+        onClick={handleLogout}
+        disabled={isLoggingOut}
+        className="mt-auto flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[#9ca3af] transition-colors hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
       >
         <LogOut className="h-5 w-5 shrink-0" strokeWidth={1.75} />
-        Logout
+        {isLoggingOut ? "Logging out…" : "Logout"}
       </button>
     </aside>
   );

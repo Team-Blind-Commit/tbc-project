@@ -2,10 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { CheckCircle2, Circle } from "lucide-react";
-import {
-  getStoredUserName,
-  voiceCoachHeaders,
-} from "@/lib/voice-coach-client";
 
 interface TaskItem {
   id: string;
@@ -15,20 +11,15 @@ interface TaskItem {
 }
 
 export function ActionPointsPanel() {
-  const userName = getStoredUserName();
   const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [loading, setLoading] = useState(Boolean(userName));
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!userName) return;
-
     let cancelled = false;
     const run = async () => {
       try {
-        const res = await fetch("/api/voice-coach/tasks", {
-          headers: voiceCoachHeaders(),
-        });
+        const res = await fetch("/api/voice-coach/tasks");
         if (!res.ok) {
           throw new Error("Failed to load tasks");
         }
@@ -52,14 +43,13 @@ export function ActionPointsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [userName]);
+  }, []);
 
   async function markComplete(taskId: string) {
     const res = await fetch("/api/voice-coach/tasks", {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        ...voiceCoachHeaders(),
       },
       body: JSON.stringify({ task_id: taskId, completed: true }),
     });

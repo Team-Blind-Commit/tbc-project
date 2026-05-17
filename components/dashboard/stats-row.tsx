@@ -1,34 +1,45 @@
-const STATS = [
-  {
-    label: "Overall Score",
-    value: "7.4",
-    sub: "+0.6 this week",
-    subClass: "text-emerald-400",
-  },
-  {
-    label: "Sessions Done",
-    value: "14",
-    sub: "All time",
-    subClass: "text-[#9ca3af]",
-  },
-  {
-    label: "Filler Words",
-    value: "8",
-    sub: "Down from 21",
-    subClass: "text-emerald-400",
-  },
-  {
-    label: "Best Score",
-    value: "8.9",
-    sub: "Interview mode",
-    subClass: "text-[#9ca3af]",
-  },
-] as const;
+export type DashboardStats = {
+  overallScore: string;
+  overallScoreSub: string;
+  sessionsDone: string;
+  sessionsDoneSub: string;
+  fillerWords: string;
+  fillerWordsSub: string;
+  bestScore: string;
+  bestScoreSub: string;
+};
 
-export function StatsRow() {
+export function StatsRow({ stats }: { stats: DashboardStats }) {
+  const cards = [
+    {
+      label: "Overall Score",
+      value: stats.overallScore,
+      sub: stats.overallScoreSub,
+      subClass: "text-emerald-400",
+    },
+    {
+      label: "Sessions Done",
+      value: stats.sessionsDone,
+      sub: stats.sessionsDoneSub,
+      subClass: "text-[#9ca3af]",
+    },
+    {
+      label: "Filler Words",
+      value: stats.fillerWords,
+      sub: stats.fillerWordsSub,
+      subClass: "text-[#9ca3af]",
+    },
+    {
+      label: "Best Score",
+      value: stats.bestScore,
+      sub: stats.bestScoreSub,
+      subClass: "text-[#9ca3af]",
+    },
+  ] as const;
+
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {STATS.map(({ label, value, sub, subClass }) => (
+      {cards.map(({ label, value, sub, subClass }) => (
         <div
           key={label}
           className="rounded-xl border border-white/[0.06] bg-[#1a1a24] p-5"

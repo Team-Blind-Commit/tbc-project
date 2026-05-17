@@ -1,28 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveVoiceSession } from "@/lib/save-voice-session";
 import { summarizeVoiceSession } from "@/lib/summarize-voice-session";
-import { getUserNameFromHeader } from "@/lib/user-name";
+import { requireUser } from "@/lib/supabase/require-user";
 import { isVoiceCoachMode } from "@/lib/voice-coach-modes";
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await requireUser();
     const body = (await request.json()) as {
       mode?: string;
-      user_name?: string;
       transcript?: string;
       duration_seconds?: number;
       conversation_id?: string;
     };
-
-    const userName =
-      body.user_name?.trim() || getUserNameFromHeader(request);
-
-    if (!userName) {
-      return NextResponse.json(
-        { error: "user_name is required" },
-        { status: 400 },
-      );
-    }
 
     if (!body.mode || !isVoiceCoachMode(body.mode)) {
       return NextResponse.json({ error: "Valid mode is required" }, { status: 400 });
@@ -64,7 +54,7 @@ export async function POST(request: NextRequest) {
       | null = null;
     try {
       saveResult = await saveVoiceSession({
-        userName,
+        userId: user.id,
         mode: body.mode,
         transcript,
         durationSeconds,
