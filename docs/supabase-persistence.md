@@ -6,8 +6,11 @@
 |-------|---------|
 | `profiles` | Username per `auth.users` row |
 | `sessions` | Speech Eval + Voice Coach history (`feature` discriminator) |
+| `session_messages` | Voice Coach chat turns (one row per user/agent message) |
 | `action_points` | Voice coach homework / tips |
 | `user_coach_memory` | Long-term coach memory between voice sessions |
+
+Apply migrations in `supabase/migrations/` on your Supabase project (Dashboard SQL or CLI), in filename order, before expecting voice history to persist.
 
 ## Product → `sessions.feature`
 
@@ -28,6 +31,7 @@ Voice coach modes: `Interview`, `Debate`, `Presentation`, `Impromptu Speaking`.
 | W3 | Speech analyzed | `POST /api/analyze` | `sessions` (`speech_eval`) |
 | W3b | Same | includes `filler_word_count`, `evaluator_score` | `sessions` |
 | W4 | Voice end session | `lib/save-voice-session.ts` | `sessions` (`voice_coach`) |
+| W4b | Voice end session | same | `session_messages` |
 | W5 | Voice end session | same | `user_coach_memory` |
 | W6 | Voice end session | same | `action_points` |
 | W7 | Mark homework done | `PATCH /api/voice-coach/tasks` | `action_points` |

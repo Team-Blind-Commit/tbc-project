@@ -3,6 +3,39 @@ import { saveVoiceSession } from "@/lib/save-voice-session";
 import { summarizeVoiceSession } from "@/lib/summarize-voice-session";
 import { requireUser } from "@/lib/supabase/require-user";
 import { isVoiceCoachMode } from "@/lib/voice-coach-modes";
+import { parseVoiceCoachSessionMessages } from "@/lib/voice-coach-session-messages";
+
+function formatSaveFailureMessage(saveError?: string): string {
+  const detail = saveError?.trim();
+  if (detail?.includes("permission denied for schema public")) {
+    return (
+      "Session finished, but Supabase blocked the save (permission denied for schema public). " +
+      "Open Supabase → SQL Editor, run supabase/fix_permissions.sql (or supabase/all_migrations.sql), then try again."
+    );
+  }
+  if (detail) {
+    return `Session finished, but saving to history failed: ${detail}`;
+  }
+  return "Session finished, but saving to history failed.";
+}
+
+function buildUnpersistedResponse(
+  summary: Awaited<ReturnType<typeof summarizeVoiceSession>>,
+  warning: string,
+) {
+  return NextResponse.json(
+    {
+      sessionId: null,
+      summary: summary.summary,
+      task: summary.task,
+      strengths: summary.strengths,
+      weaknesses: summary.weaknesses,
+      persisted: false,
+      warning,
+    },
+    { status: 503 },
+  );
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +45,7 @@ export async function POST(request: NextRequest) {
       transcript?: string;
       duration_seconds?: number;
       conversation_id?: string;
+      messages?: unknown;
     };
 
     if (!body.mode || !isVoiceCoachMode(body.mode)) {
@@ -45,7 +79,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const durationSeconds = Math.round(body.duration_seconds);
+    const durationSeconds = Math.max(1, Math.round(body.duration_seconds));
+
+    const parsedMessages = parseVoiceCoachSessionMessages(body.messages);
+    if (parsedMessages === null) {
+      return NextResponse.json(
+        { error: "messages must be a valid array of chat turns" },
+        { status: 400 },
+      );
+    }
 
     const summary = await summarizeVoiceSession(body.mode, transcript);
 
@@ -60,32 +102,24 @@ export async function POST(request: NextRequest) {
         durationSeconds,
         conversationId,
         summary,
+        messages: parsedMessages.length > 0 ? parsedMessages : undefined,
       });
     } catch (error) {
       console.error("[voice-coach/end-session] save failed:", error);
-      return NextResponse.json({
-        sessionId: null,
-        summary: summary.summary,
-        task: summary.task,
-        strengths: summary.strengths,
-        weaknesses: summary.weaknesses,
-        persisted: false,
-        warning: "Session finished, but saving to history failed.",
-      });
+      const message =
+        error instanceof Error ? error.message : "Unknown save error";
+      return buildUnpersistedResponse(summary, formatSaveFailureMessage(message));
     }
 
     const { sessionId, error: saveError, skipped } = saveResult;
 
     if (saveError && !skipped) {
-      return NextResponse.json({
-        sessionId: null,
-        summary: summary.summary,
-        task: summary.task,
-        strengths: summary.strengths,
-        weaknesses: summary.weaknesses,
-        persisted: false,
-        warning: "Session finished, but saving to history failed.",
-      });
+      return buildUnpersistedResponse(summary, formatSaveFailureMessage(saveError));
+    }
+
+    const persisted = !skipped && Boolean(sessionId);
+    if (!persisted) {
+      return buildUnpersistedResponse(summary, formatSaveFailureMessage(saveError));
     }
 
     return NextResponse.json({
@@ -94,7 +128,7 @@ export async function POST(request: NextRequest) {
       task: summary.task,
       strengths: summary.strengths,
       weaknesses: summary.weaknesses,
-      persisted: !skipped && Boolean(sessionId),
+      persisted: true,
     });
   } catch (error) {
     console.error("[voice-coach/end-session] error:", error);

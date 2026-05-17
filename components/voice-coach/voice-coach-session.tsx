@@ -2,8 +2,9 @@
 
 /**
  * Voice Coach persistence: chat is buffered in memory during the ElevenLabs session.
- * Supabase writes run on End session (POST /api/voice-coach/end-session) to sessions,
- * user_coach_memory, and action_points. Modes: Interview, Debate, Presentation,
+ * Chat history is stored in localStorage per user (see lib/voice-coach-local-history.ts).
+ * End session may call POST /api/voice-coach/end-session for AI summary/homework only.
+ * Modes: Interview, Debate, Presentation,
  * Impromptu Speaking. A sessionStorage draft is kept if the connection drops early.
  */
 
@@ -32,6 +33,18 @@ import {
   clearVoiceCoachDraft,
   saveVoiceCoachDraft,
 } from "@/lib/voice-coach-draft";
+import {
+  createLocalSessionId,
+  readVoiceCoachLocalHistory,
+  resolveVoiceCoachUserId,
+  upsertVoiceCoachLocalHistoryItem,
+  type VoiceCoachLocalHistoryItem,
+} from "@/lib/voice-coach-local-history";
+import { buildConversationHistoryTitle } from "@/lib/voice-coach-history-title";
+import {
+  resolveVoiceCoachHistoryModeTheme,
+  VOICE_COACH_MODE_LEGEND,
+} from "@/lib/voice-coach-mode-theme";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
 type AuthMode = "signed" | "public";
@@ -50,6 +63,7 @@ interface VoiceCoachHistoryItem {
   summary: string | null;
   task: string | null;
   transcript: string;
+  messages?: ConversationMessage[];
   createdAt: string | null;
   durationSeconds: number | null;
 }
@@ -65,6 +79,116 @@ interface PendingConnect {
 
 interface VoiceCoachSessionProps {
   mode: VoiceCoachMode;
+}
+
+function toHistoryListItem(
+  item: VoiceCoachLocalHistoryItem,
+): VoiceCoachHistoryItem {
+  return {
+    id: item.id,
+    title: item.title,
+    mode: item.mode,
+    summary: item.summary,
+    task: item.task,
+    transcript: item.transcript,
+    messages: item.messages,
+    createdAt: item.createdAt,
+    durationSeconds: item.durationSeconds,
+  };
+}
+
+export interface VoiceCoachHistoryHandle {
+  historyItems: VoiceCoachHistoryItem[];
+  historyLoading: boolean;
+  historyError: string | null;
+  userId: string | null;
+  selectedHistoryId: string | null;
+  setSelectedHistoryId: (id: string | null) => void;
+  loadHistory: () => Promise<void>;
+  upsertHistoryItem: (item: Omit<VoiceCoachLocalHistoryItem, "userId">) => void;
+}
+
+/** Lives outside ConversationProvider; persists per user in localStorage only. */
+function useVoiceCoachHistory(): VoiceCoachHistoryHandle {
+  const [userId, setUserId] = useState<string | null>(null);
+  const [historyItems, setHistoryItems] = useState<VoiceCoachHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resolvedUserId = await resolveVoiceCoachUserId();
+        if (cancelled) return;
+        setUserId(resolvedUserId);
+        const items = readVoiceCoachLocalHistory(resolvedUserId).map(toHistoryListItem);
+        setHistoryItems(items);
+        setHistoryError(null);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("[voice-coach] local history init failed:", err);
+        setHistoryError("Could not load chat history from this browser.");
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const upsertHistoryItem = useCallback(
+    (item: Omit<VoiceCoachLocalHistoryItem, "userId">) => {
+      void (async () => {
+        try {
+          const uid = userId ?? (await resolveVoiceCoachUserId());
+          if (!userId) {
+            setUserId(uid);
+          }
+          const next = upsertVoiceCoachLocalHistoryItem(uid, {
+            ...item,
+            userId: uid,
+          }).map(toHistoryListItem);
+          setHistoryItems(next);
+          setHistoryError(null);
+        } catch (err) {
+          console.error("[voice-coach] local history save failed:", err);
+          setHistoryError("Could not save chat history on this device.");
+        }
+      })();
+    },
+    [userId],
+  );
+
+  const loadHistory = useCallback(async () => {
+    if (!userId) return;
+    setHistoryLoading(true);
+    try {
+      const items = readVoiceCoachLocalHistory(userId).map(toHistoryListItem);
+      setHistoryItems(items);
+      setHistoryError(null);
+    } catch (err) {
+      console.error("[voice-coach] local history load failed:", err);
+      setHistoryError("Could not load chat history from this browser.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [userId]);
+
+  return {
+    historyItems,
+    historyLoading,
+    historyError,
+    userId,
+    selectedHistoryId,
+    setSelectedHistoryId,
+    loadHistory,
+    upsertHistoryItem,
+  };
 }
 
 const SESSION_THREE_COLUMN_LAYOUT =
@@ -243,11 +367,51 @@ function getSessionDescription(
   return "Your coach remembers your progress and adapts each session to this mode.";
 }
 
+function resolveConversationMessageRole(
+  payload: Record<string, unknown>,
+): ConversationMessageRole {
+  const roleField = payload.role ?? payload.type;
+  if (typeof roleField === "string") {
+    const role = roleField.toLowerCase();
+    if (
+      role.includes("user") ||
+      role.includes("human") ||
+      role === "user_transcript" ||
+      role === "user_message"
+    ) {
+      return "user";
+    }
+    if (
+      role.includes("agent") ||
+      role.includes("assistant") ||
+      role.includes("ai") ||
+      role === "agent_response"
+    ) {
+      return "agent";
+    }
+  }
+
+  const source =
+    typeof payload.source === "string" ? payload.source.toLowerCase() : "";
+  if (source.includes("user") || source.includes("human")) {
+    return "user";
+  }
+
+  return "agent";
+}
+
 function normalizeConversationMessage(message: unknown): ConversationMessage | null {
   if (typeof message === "string") {
-    const text = message.trim();
-    if (!text) return null;
-    return { role: "agent", text, timestamp: Date.now() };
+    const trimmed = message.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return normalizeConversationMessage(JSON.parse(trimmed) as unknown);
+      } catch {
+        return { role: "agent", text: trimmed, timestamp: Date.now() };
+      }
+    }
+    return { role: "agent", text: trimmed, timestamp: Date.now() };
   }
 
   if (!message || typeof message !== "object") {
@@ -255,15 +419,21 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   }
 
   const payload = message as Record<string, unknown>;
-  const source = typeof payload.source === "string" ? payload.source.toLowerCase() : "";
-  const role: ConversationMessageRole =
-    source.includes("user") || source.includes("human") ? "user" : "agent";
+
+  if (payload.message && typeof payload.message === "object") {
+    return normalizeConversationMessage(payload.message);
+  }
+
+  const role = resolveConversationMessageRole(payload);
 
   const textCandidates = [
     payload.message,
     payload.text,
     payload.transcript,
     payload.content,
+    payload.user_transcription,
+    payload.agent_response,
+    payload.agent_response_correction,
   ];
   const text = textCandidates.find(
     (value): value is string =>
@@ -274,13 +444,12 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
     return null;
   }
 
-  return { role, text: text.trim(), timestamp: Date.now() };
-}
+  const timestamp =
+    typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
+      ? payload.timestamp
+      : Date.now();
 
-function summarizeMessageTitle(text: string): string {
-  const normalized = text.trim().replace(/\s+/g, " ");
-  if (!normalized) return "Untitled chat";
-  return normalized.length > 64 ? `${normalized.slice(0, 61).trim()}...` : normalized;
+  return { role, text: text.trim(), timestamp };
 }
 
 function formatConversationTitle(
@@ -429,14 +598,28 @@ function CoachFace({
 }
 
 export function VoiceCoachSession({ mode }: VoiceCoachSessionProps) {
+  const history = useVoiceCoachHistory();
+
   return (
     <ConversationProvider>
-      <VoiceCoachSessionInner mode={mode} />
+      <VoiceCoachSessionInner mode={mode} history={history} />
     </ConversationProvider>
   );
 }
 
-function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
+function VoiceCoachSessionInner({
+  mode,
+  history,
+}: VoiceCoachSessionProps & { history: VoiceCoachHistoryHandle }) {
+  const {
+    historyItems,
+    historyLoading,
+    historyError,
+    selectedHistoryId,
+    setSelectedHistoryId,
+    loadHistory,
+    upsertHistoryItem,
+  } = history;
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -445,10 +628,6 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
   const [summary, setSummary] = useState<string | null>(null);
   const [autoEndedByVoice, setAutoEndedByVoice] = useState(false);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
-  const [historyItems, setHistoryItems] = useState<VoiceCoachHistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [showMessages, setShowMessages] = useState(false);
   const [avatarBlinking, setAvatarBlinking] = useState(false);
   const [avatarMouthLevel, setAvatarMouthLevel] = useState<0 | 1 | 2 | 3>(0);
@@ -480,13 +659,10 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     null,
   );
 
-  const historyLoadGenerationRef = useRef(0);
-
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      historyLoadGenerationRef.current += 1;
       activeStartAttemptRef.current = ++startAttemptCounterRef.current;
       connectionLockRef.current = false;
       releaseMicrophoneForVoiceSession();
@@ -504,79 +680,12 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
     };
   }, []);
 
-  const loadHistory = useCallback(async () => {
-    const loadGeneration = ++historyLoadGenerationRef.current;
-
-    setHistoryLoading(true);
-    setHistoryError(null);
-
-    const isStale = () => loadGeneration !== historyLoadGenerationRef.current;
-
-    try {
-      const response = await fetch("/api/voice-coach/history");
-
-      if (isStale()) return;
-
-      const data = await parseApiJson<{
-        items?: VoiceCoachHistoryItem[];
-        error?: string;
-        warning?: string;
-        persisted?: boolean;
-      }>(response);
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Failed to load chat history");
-      }
-
-      if (isStale() || !isMountedRef.current) return;
-
-      setHistoryItems(data.items ?? []);
-      if (data.warning) {
-        setHistoryError(data.warning);
-      } else if (data.persisted === false) {
-        setHistoryError("History is temporarily unavailable.");
-      }
-    } catch (err) {
-      if (isStale() || !isMountedRef.current) return;
-
-      const message =
-        err instanceof Error ? err.message : "Failed to load chat history";
-      const isAbort =
-        (err instanceof DOMException && err.name === "AbortError") ||
-        message.toLowerCase().includes("aborted");
-
-      if (isAbort) return;
-
-      console.error("[voice-coach] history load failed:", err);
-      setHistoryError(
-        message === "Failed to fetch"
-          ? "Could not reach the server. Check your connection and that npm run dev is running."
-          : message,
-      );
-    } finally {
-      if (!isStale() && isMountedRef.current) {
-        setHistoryLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (isMountedRef.current) {
-        void loadHistory();
-      }
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [loadHistory]);
-
   const liveConversationItem = useMemo(() => {
     if (messages.length === 0) return null;
-    const firstMeaningfulMessage = messages.find((msg) => msg.text.trim().length > 0);
-    const title = firstMeaningfulMessage
-      ? summarizeMessageTitle(firstMeaningfulMessage.text)
-      : "Current conversation";
+    const title = buildConversationHistoryTitle({
+      mode,
+      messages: messages.filter((message) => message.text.trim().length > 0),
+    });
 
     const transcript = messages
       .map((message) => `[${message.role}] ${message.text}`)
@@ -589,33 +698,47 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       summary: null,
       task: null,
       transcript,
+      messages,
       createdAt: null,
       durationSeconds: null,
     } satisfies VoiceCoachHistoryItem;
   }, [messages, mode]);
 
   const allHistoryItems = useMemo(() => {
-    if (!liveConversationItem) return historyItems;
+    const showLiveDraft =
+      liveConversationItem && (phase === "active" || phase === "ending");
+    if (!showLiveDraft) return historyItems;
     return [liveConversationItem, ...historyItems];
-  }, [historyItems, liveConversationItem]);
+  }, [historyItems, liveConversationItem, phase]);
 
-  const effectiveSelectedHistoryId =
-    selectedHistoryId && allHistoryItems.some((item) => item.id === selectedHistoryId)
-      ? selectedHistoryId
-      : allHistoryItems[0]?.id ?? null;
+  const effectiveSelectedHistoryId = useMemo(() => {
+    if (liveConversationItem && (phase === "active" || phase === "ending")) {
+      return "__current__";
+    }
+    if (
+      selectedHistoryId &&
+      allHistoryItems.some((item) => item.id === selectedHistoryId)
+    ) {
+      return selectedHistoryId;
+    }
+    return allHistoryItems[0]?.id ?? null;
+  }, [allHistoryItems, liveConversationItem, phase, selectedHistoryId]);
 
   const selectedHistoryItem = useMemo(
     () => allHistoryItems.find((item) => item.id === effectiveSelectedHistoryId) ?? null,
     [allHistoryItems, effectiveSelectedHistoryId],
   );
 
-  const selectedHistoryMessages = useMemo(
-    () =>
-      selectedHistoryItem
-        ? normalizeTranscriptLines(selectedHistoryItem.transcript)
-        : [],
-    [selectedHistoryItem],
-  );
+  const selectedHistoryMessages = useMemo(() => {
+    if (!selectedHistoryItem) return [];
+    if (selectedHistoryItem.id === "__current__") {
+      return messages.filter((message) => message.text.trim().length > 0);
+    }
+    if (selectedHistoryItem.messages && selectedHistoryItem.messages.length > 0) {
+      return selectedHistoryItem.messages;
+    }
+    return normalizeTranscriptLines(selectedHistoryItem.transcript);
+  }, [selectedHistoryItem, messages]);
   const selectedHistoryIndex = selectedHistoryItem
     ? allHistoryItems.findIndex((item) => item.id === selectedHistoryItem.id)
     : -1;
@@ -836,11 +959,11 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       return;
     }
 
-    const fallback = (
+    const fallbackText = (
       typeof message === "string" ? message : JSON.stringify(message ?? "")
     ).trim();
-    if (fallback) {
-      transcriptRef.current.push(fallback);
+    if (fallbackText) {
+      transcriptRef.current.push(`[agent] ${fallbackText}`);
     }
   };
 
@@ -1292,12 +1415,21 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
       return;
     }
 
-    const durationSeconds = Math.round(
-      (nowTimestamp() - startedAtRef.current) / 1000,
+    const durationSeconds = Math.max(
+      1,
+      Math.round((nowTimestamp() - startedAtRef.current) / 1000),
     );
     const transcript =
       transcriptRef.current.join("\n") ||
       `Voice coaching session in ${mode} mode. Duration: ${durationSeconds}s.`;
+
+    const savedMessages = messages
+      .filter((message) => message.text.trim().length > 0)
+      .map((message) => ({ ...message }));
+
+    let summaryText: string | null = null;
+    let taskText: string | null = null;
+    let cloudNotice: string | null = null;
 
     try {
       const res = await fetch("/api/voice-coach/end-session", {
@@ -1310,6 +1442,7 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
           transcript,
           duration_seconds: durationSeconds,
           conversation_id: conversationId,
+          messages: savedMessages,
         }),
       });
 
@@ -1318,48 +1451,85 @@ function VoiceCoachSessionInner({ mode }: VoiceCoachSessionProps) {
         task?: string;
         summary?: string;
         warning?: string;
+        persisted?: boolean;
+        sessionId?: string | null;
       }>(res);
 
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to save session");
-      }
-
-      if (!isMountedRef.current) return;
-
-      setTask(data.task ?? null);
-      setSummary(data.summary ?? null);
-      if (data.warning) {
-        setNotice(data.warning);
-      } else if (triggeredByVoiceIntent) {
-        setNotice("Session ended from your voice command.");
+      if (res.ok) {
+        summaryText = data.summary ?? null;
+        taskText = data.task ?? null;
+        if (data.persisted === false) {
+          cloudNotice =
+            data.warning ??
+            "Coach summary saved locally. Cloud sync was skipped.";
+        }
       } else {
-        setNotice(null);
+        cloudNotice =
+          data.warning ??
+          data.error ??
+          "Session saved on this device. AI summary was unavailable.";
+        console.warn("[voice-coach] end-session API:", data.error ?? data.warning);
       }
-      if (conversationId) {
-        clearVoiceCoachDraft(conversationId);
-      }
-      conversationIdRef.current = null;
-      setStoredConversationId(null);
-      setPhase("done");
-      void loadHistory();
     } catch (err) {
-      if (!isMountedRef.current) return;
-      console.error("[voice-coach] end session failed:", err);
-      setError(
-        formatVoiceCoachConnectionError(
-          err instanceof Error ? err.message : "Could not save your session",
-          err,
-        ),
-      );
-      phaseRef.current = "idle";
-      setPhase("idle");
-    } finally {
-      if (isMountedRef.current) {
-        autoEndingRef.current = false;
-        isStartingRef.current = false;
-      }
+      console.warn("[voice-coach] end-session API failed:", err);
+      cloudNotice =
+        "Session saved on this device. AI summary was unavailable.";
     }
-  }, [conversation, getConversationId, loadHistory, mode, storedConversationId]);
+
+    if (!isMountedRef.current) return;
+
+    const savedSessionId = createLocalSessionId();
+    const title = buildConversationHistoryTitle({
+      mode,
+      messages: savedMessages,
+      summary: summaryText,
+    });
+
+    setTask(taskText);
+    setSummary(summaryText);
+    if (triggeredByVoiceIntent) {
+      setNotice("Session ended from your voice command.");
+    } else if (cloudNotice) {
+      setNotice(cloudNotice);
+    } else {
+      setNotice(null);
+    }
+    if (conversationId) {
+      clearVoiceCoachDraft(conversationId);
+    }
+    conversationIdRef.current = null;
+    setStoredConversationId(null);
+
+    upsertHistoryItem({
+      id: savedSessionId,
+      title,
+      mode,
+      summary: summaryText,
+      task: taskText,
+      transcript,
+      messages: savedMessages,
+      createdAt: new Date().toISOString(),
+      durationSeconds,
+    });
+    setSelectedHistoryId(savedSessionId);
+
+    setMessages([]);
+    transcriptRef.current = [];
+    phaseRef.current = "done";
+    setPhase("done");
+
+    if (isMountedRef.current) {
+      autoEndingRef.current = false;
+      isStartingRef.current = false;
+    }
+  }, [
+    conversation,
+    getConversationId,
+    messages,
+    mode,
+    storedConversationId,
+    upsertHistoryItem,
+  ]);
 
   const coachAvatar = MODE_COACH_AVATAR[mode];
 
@@ -1724,12 +1894,28 @@ function HistorySidebar({
       className={`overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0f] ${className}`}
     >
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
-          Chat History
-        </p>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">
+            Chat History
+          </p>
+          <p className="text-[10px] text-[#6b7280]">Saved on this device</p>
+        </div>
         <span className="rounded-full border border-[#8b5cf6]/35 bg-[#8b5cf6]/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#d8b4fe]">
           New Chat
         </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5 border-b border-white/10 px-3 py-2">
+        {VOICE_COACH_MODE_LEGEND.map(({ mode, theme }) => (
+          <span
+            key={mode}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${theme.border} ${theme.background}`}
+          >
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${theme.dot}`} />
+            <span className={theme.modeLabel}>
+              {mode === "Impromptu Speaking" ? "Impromptu" : mode}
+            </span>
+          </span>
+        ))}
       </div>
       <div className="max-h-[74vh] space-y-2 overflow-y-auto p-3">
         {historyLoading && (
@@ -1738,38 +1924,49 @@ function HistorySidebar({
           </p>
         )}
         {historyError && (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          <p
+            className={`rounded-lg border px-3 py-2 text-xs ${
+              items.length > 0
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-red-500/30 bg-red-500/10 text-red-200"
+            }`}
+          >
             {historyError}
           </p>
         )}
-        {!historyLoading && items.length === 0 && (
+        {!historyLoading && items.length === 0 ? (
           <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-[#9ca3af]">
             No chat history yet.
           </p>
-        )}
-        {items.map((item, index) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onSelect(item.id)}
-            className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-              selectedHistoryId === item.id
-                ? "border-[#8b5cf6]/55 bg-[#8b5cf6]/20 shadow-[0_0_0_1px_rgba(139,92,246,0.35)]"
-                : "border-white/10 bg-[#111114] hover:bg-white/[0.04]"
-            }`}
-          >
-            <p
-              className={`text-xs ${
-                selectedHistoryId === item.id ? "text-[#c4b5fd]" : "text-[#9ca3af]"
+        ) : null}
+        {items.map((item, index) => {
+          const theme = resolveVoiceCoachHistoryModeTheme(item.mode);
+          const isSelected = selectedHistoryId === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                isSelected
+                  ? `${theme.borderSelected} ${theme.backgroundSelected} ${theme.selectedShadow}`
+                  : `${theme.border} ${theme.background} ${theme.hover}`
               }`}
             >
-              {item.mode}
-            </p>
-            <p className="mt-1 text-sm font-medium text-white">
-              {formatConversationTitle(item, index)}
-            </p>
-          </button>
-        ))}
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${theme.dot}`} />
+                <p
+                  className={`text-xs font-semibold uppercase tracking-wide ${theme.modeLabel}`}
+                >
+                  {item.mode}
+                </p>
+              </div>
+              <p className={`mt-1.5 text-sm font-medium leading-snug ${theme.title}`}>
+                {formatConversationTitle(item, index)}
+              </p>
+            </button>
+          );
+        })}
       </div>
     </aside>
   );
