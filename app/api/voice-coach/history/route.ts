@@ -14,6 +14,9 @@ interface SessionRow {
   id: string;
   mode: string | null;
   summary: string | null;
+  strengths: string | null;
+  weaknesses: string | null;
+  elevenlabs_conversation_id: string | null;
   action_points: { task: string | null }[] | null;
   transcript: string | null;
   created_at: string | null;
@@ -33,20 +36,23 @@ interface VoiceCoachHistoryItem {
   mode: string;
   summary: string | null;
   task: string | null;
+  strengths: string | null;
+  weaknesses: string | null;
   transcript: string;
   messages: VoiceCoachHistoryMessage[];
   createdAt: string | null;
   durationSeconds: number | null;
+  conversationId: string | null;
 }
 
 const SELECT_WITH_MESSAGES =
-  "id, mode, summary, transcript, created_at, duration_seconds, feature, action_points(task, created_at), session_messages(role, content, sequence_index, spoke_at)";
+  "id, mode, summary, strengths, weaknesses, transcript, created_at, duration_seconds, elevenlabs_conversation_id, feature, action_points(task, created_at), session_messages(role, content, sequence_index, spoke_at)";
 
 const SELECT_WITHOUT_MESSAGES =
-  "id, mode, summary, transcript, created_at, duration_seconds, feature, action_points(task, created_at)";
+  "id, mode, summary, strengths, weaknesses, transcript, created_at, duration_seconds, elevenlabs_conversation_id, feature, action_points(task, created_at)";
 
 const SELECT_MINIMAL =
-  "id, mode, summary, transcript, created_at, duration_seconds, feature";
+  "id, mode, summary, transcript, created_at, duration_seconds, elevenlabs_conversation_id, feature";
 
 function buildSessionTitle(session: SessionRow): string {
   const summaryTitle = session.summary?.trim();
@@ -81,10 +87,13 @@ function mapHistoryItem(session: SessionRow): VoiceCoachHistoryItem {
     mode: session.mode?.trim() || "Voice Coach",
     summary: session.summary,
     task: latestTask || null,
+    strengths: session.strengths,
+    weaknesses: session.weaknesses,
     transcript: session.transcript?.trim() ?? "",
     messages,
     createdAt: session.created_at,
     durationSeconds: session.duration_seconds,
+    conversationId: session.elevenlabs_conversation_id?.trim() || null,
   };
 }
 

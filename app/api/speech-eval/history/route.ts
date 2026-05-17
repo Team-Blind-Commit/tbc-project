@@ -10,7 +10,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("sessions")
       .select(
-        "id, topic, duration_seconds, transcript, counter_feedback, grammarian_feedback, evaluator_feedback, created_at",
+        "id, topic, duration_seconds, transcript, counter_feedback, grammarian_feedback, evaluator_feedback, evaluator_score, created_at",
       )
       .eq("user_id", user.id)
       .eq("feature", "speech_eval")
