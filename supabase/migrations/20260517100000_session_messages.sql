@@ -34,3 +34,5 @@ CREATE POLICY "session_messages_insert_own"
 CREATE UNIQUE INDEX IF NOT EXISTS user_coach_memory_user_id_key
   ON user_coach_memory (user_id)
   WHERE user_id IS NOT NULL;
+
+NOTIFY pgrst, 'reload schema';

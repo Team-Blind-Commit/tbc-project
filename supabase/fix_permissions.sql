@@ -1,5 +1,8 @@
--- Fix "permission denied for schema public" for authenticated app users.
--- Safe to re-run; required on some Supabase projects after custom setup.
+-- Run this ONCE in Supabase Dashboard → SQL Editor if you see:
+--   "permission denied for schema public"
+--   "Session finished, but saving to history failed"
+--
+-- Safe to re-run.
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 
@@ -14,4 +17,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO authenticated;
 
+-- Tables created after the grants above (e.g. session_messages)
+GRANT SELECT, INSERT, UPDATE, DELETE ON session_messages TO authenticated;
+GRANT SELECT ON session_messages TO anon;
+
+-- Refresh PostgREST schema cache (fixes session_messages relationship errors)
 NOTIFY pgrst, 'reload schema';
