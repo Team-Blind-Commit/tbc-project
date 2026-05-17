@@ -1,9 +1,13 @@
 # Agent Instructions
 
-Read `.cursor/rules/voxen-core.mdc` before writing any code. It is always applied.
+Read `.cursor/rules/voxen-core.mdc` first (always applied). Use the other rules when editing matching files:
 
-- Use Next.js App Router (`app/` directory). TypeScript only.
-- All API keys are server-side only — inside `app/api/` routes, never in client components.
-- Tailwind CSS for all styling. No inline styles, no extra CSS files.
-- Respect folder ownership — do not edit another subteam's folder without coordination.
-- Do not commit `.env.local` or any file containing secrets.
+- **API / lib / middleware:** `.cursor/rules/voxen-api.mdc`
+- **React UI:** `.cursor/rules/voxen-ui.mdc`
+
+**Podium AI** — Next.js App Router, TypeScript, Tailwind v4, Supabase Auth + RLS.
+
+- API keys and ElevenLabs agent ID are **server-only** (`app/api/`, `lib/`).
+- Protected app lives under `app/(protected)/`; unauthenticated users redirect to `/login`.
+- Persistence map: `docs/supabase-persistence.md`.
+- Do not commit `.env.local` or secrets.

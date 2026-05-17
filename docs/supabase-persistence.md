@@ -48,6 +48,6 @@ Voice coach modes: `Interview`, `Debate`, `Presentation`, `Impromptu Speaking`.
 - **Speech eval:** Primary save is `POST /api/analyze` (returns `persisted`). `localStorage` only when `persisted === false`.
 - **Panel dashboard scores:** Only **Evaluator (Marcus)** score is stored as `evaluator_score`. Counter and Grammarian are qualitative feedback columns.
 
-## Folder ownership
+## Shared code
 
-See `.cursor/rules/voxen-core.mdc` — coordinate before editing shared `lib/` or dashboard.
+See `.cursor/rules/voxen-core.mdc` — prefer focused changes; coordinate when editing cross-feature `lib/` or dashboard layout.
