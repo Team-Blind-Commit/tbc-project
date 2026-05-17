@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   ArrowRight,
   BarChart3,
@@ -7,6 +8,7 @@ import {
   Users,
   Zap,
 } from "lucide-react";
+import { buildLoginHref } from "@/lib/auth-redirect";
 
 const COACH_MODES = [
   {
@@ -141,13 +143,13 @@ export function TwoWaysSection() {
                 </li>
               ))}
             </ul>
-            <a
-              href="#the-panel"
+            <Link
+              href={buildLoginHref("/speech-eval")}
               className="mt-8 inline-flex w-fit items-center gap-2 rounded-xl bg-[#06b6d4] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#0891b2]"
             >
               Try It
               <ArrowRight className="h-4 w-4" />
-            </a>
+            </Link>
           </div>
         </div>
       </div>

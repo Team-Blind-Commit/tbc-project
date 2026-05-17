@@ -40,7 +40,7 @@ export function Navbar() {
         </nav>
 
         <Link
-          href={buildLoginHref('/voice-coach', 'Interview')}
+          href={buildLoginHref('/dashboard')}
           className="shrink-0 rounded-lg bg-[#8b5cf6] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7c3aed]"
         >
           Start Practicing Free
