@@ -109,7 +109,7 @@ export function deriveOAuthUsername(user: User): string {
   return candidates[0] ?? idFallbackUsername(user.id)
 }
 
-async function profileExists(
+export async function profileExists(
   supabase: ProfileClient,
   userId: string
 ): Promise<{ exists: boolean; selectFailed: boolean }> {
@@ -274,5 +274,35 @@ export async function createProfileFromUser(
     return { ok: false, message: 'Could not save your profile. Please try again.' }
   }
 
+  return { ok: true }
+}
+
+/** Update username for an existing profile row. */
+export async function updateProfileUsername(
+  supabase: ProfileClient,
+  userId: string,
+  rawUsername: string,
+): Promise<ProfileResult> {
+  const sanitized = sanitizeUsername(rawUsername)
+
+  if (!sanitized) {
+    return {
+      ok: false,
+      message:
+        'Username must be at least 2 characters (letters, numbers, underscores).',
+    }
+  }
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ username: sanitized })
+    .eq('id', userId)
+
+  if (error) {
+    logProfileDbError('updateProfileUsername', error)
+    return userFacingInsertError(error)
+  }
+
+  console.info('[profiles] updateProfileUsername ok', { userId, username: sanitized })
   return { ok: true }
 }

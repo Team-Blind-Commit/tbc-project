@@ -1,8 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { ActionPointsPanel } from "./action-points-panel";
 import { BottomPanels, type RecentSession } from "./bottom-panels";
+import { DashboardShell } from "./dashboard-shell";
 import { PracticeCards } from "./practice-cards";
-import { Sidebar } from "./sidebar";
 import { StatsRow } from "./stats-row";
 import { TopBar } from "./top-bar";
 
@@ -16,7 +16,11 @@ export async function DashboardPage() {
   if (!user) return null;
 
   const [{ data: profile }, { data: sessions }] = await Promise.all([
-    supabase.from("profiles").select("username").eq("id", user.id).maybeSingle(),
+    supabase
+      .from("profiles")
+      .select("username")
+      .eq("id", user.id)
+      .maybeSingle(),
     supabase
       .from("sessions")
       .select(
@@ -156,50 +160,39 @@ export async function DashboardPage() {
   const streakDays = weekSessions.length;
 
   return (
-    <div
-      id="podium-dashboard"
-      className="flex min-h-screen bg-[#050505] font-[family-name:var(--font-geist-sans)] text-white antialiased"
-    >
-      <Sidebar />
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
-          <div className="mx-auto max-w-6xl space-y-8">
-            <TopBar
-              name={displayName}
-              sessionsThisWeek={weekSessions.length}
-              streakDays={streakDays}
-              initials={initials}
-            />
-            <StatsRow
-              stats={{
-                overallScore: overallScore === "—" ? overallScore : `${overallScore}/10`,
-                overallScoreSub:
-                  weeklyDelta === null
-                    ? "No score trend yet"
-                    : `${weeklyDelta.startsWith("-") ? "" : "+"}${weeklyDelta} this week`,
-                sessionsDone: String(allSessions.length),
-                sessionsDoneSub: "All time",
-                fillerWords: String(totalFillerWords),
-                fillerWordsSub: "From saved sessions",
-                bestScore: bestScore === "—" ? bestScore : `${bestScore}/10`,
-                bestScoreSub: "Best evaluator score",
-              }}
-            />
-            <PracticeCards />
-            <ActionPointsPanel />
-            <BottomPanels
-              panelScores={panelScores}
-              compositeScore={
-                hasEvaluatorScore ? `${compositeValue.toFixed(1)} / 10` : "—"
-              }
-              panelScoresNote={panelScoresNote}
-              trendBars={trendBars}
-              recentSessions={recentSessions}
-            />
-          </div>
-        </main>
-      </div>
-    </div>
+    <DashboardShell>
+      <TopBar
+        name={displayName}
+        sessionsThisWeek={weekSessions.length}
+        streakDays={streakDays}
+        initials={initials}
+      />
+      <StatsRow
+        stats={{
+          overallScore: overallScore === "—" ? overallScore : `${overallScore}/10`,
+          overallScoreSub:
+            weeklyDelta === null
+              ? "No score trend yet"
+              : `${weeklyDelta.startsWith("-") ? "" : "+"}${weeklyDelta} this week`,
+          sessionsDone: String(allSessions.length),
+          sessionsDoneSub: "All time",
+          fillerWords: String(totalFillerWords),
+          fillerWordsSub: "From saved sessions",
+          bestScore: bestScore === "—" ? bestScore : `${bestScore}/10`,
+          bestScoreSub: "Best evaluator score",
+        }}
+      />
+      <PracticeCards />
+      <ActionPointsPanel />
+      <BottomPanels
+        panelScores={panelScores}
+        compositeScore={
+          hasEvaluatorScore ? `${compositeValue.toFixed(1)} / 10` : "—"
+        }
+        panelScoresNote={panelScoresNote}
+        trendBars={trendBars}
+        recentSessions={recentSessions}
+      />
+    </DashboardShell>
   );
 }
