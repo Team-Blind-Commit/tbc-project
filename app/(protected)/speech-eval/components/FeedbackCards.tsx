@@ -249,6 +249,7 @@ function JudgeSeat({
   isBookOpen: boolean;
   onToggleBook: () => void;
   onStateChange: (
+    role: SpeakRole,
     state: CardState,
     error: string,
     handlers: {
@@ -363,8 +364,20 @@ function JudgeSeat({
 
   // Bubble state + handlers up to parent so the book panel can use them
   useEffect(() => {
-    onStateChange(cardState, error, { onPlay: playFeedback, onTogglePause: togglePause, onStop: handleStop });
-  }, [cardState, error, playFeedback, togglePause, handleStop, onStateChange]);
+    onStateChange(config.role, cardState, error, {
+      onPlay: playFeedback,
+      onTogglePause: togglePause,
+      onStop: handleStop,
+    });
+  }, [
+    config.role,
+    cardState,
+    error,
+    playFeedback,
+    togglePause,
+    handleStop,
+    onStateChange,
+  ]);
 
   const isActive = cardState === "playing" || cardState === "paused" || cardState === "loading-audio";
 
@@ -533,21 +546,30 @@ export function FeedbackCards({
   const selectedState = selectedRole ? judgeStates[selectedRole] : null;
 
   const handleStateChange = useCallback(
-    (role: SpeakRole) =>
-      (
-        cardState: CardState,
-        error: string,
-        handlers: {
-          onPlay: (e: React.MouseEvent) => void;
-          onTogglePause: (e: React.MouseEvent) => void;
-          onStop: (e: React.MouseEvent) => void;
-        },
-      ) => {
-        setJudgeStates((prev) => ({
-          ...prev,
-          [role]: { cardState, error, handlers },
-        }));
+    (
+      role: SpeakRole,
+      cardState: CardState,
+      error: string,
+      handlers: {
+        onPlay: (e: React.MouseEvent) => void;
+        onTogglePause: (e: React.MouseEvent) => void;
+        onStop: (e: React.MouseEvent) => void;
       },
+    ) => {
+      setJudgeStates((prev) => {
+        const current = prev[role];
+        if (
+          current?.cardState === cardState &&
+          current.error === error &&
+          current.handlers.onPlay === handlers.onPlay &&
+          current.handlers.onTogglePause === handlers.onTogglePause &&
+          current.handlers.onStop === handlers.onStop
+        ) {
+          return prev;
+        }
+        return { ...prev, [role]: { cardState, error, handlers } };
+      });
+    },
     [],
   );
 
@@ -634,7 +656,7 @@ export function FeedbackCards({
                     onToggleBook={() =>
                       setSelectedRole((r) => (r === judge.role ? null : judge.role))
                     }
-                    onStateChange={handleStateChange(judge.role)}
+                    onStateChange={handleStateChange}
                   />
                 ))}
               </div>
