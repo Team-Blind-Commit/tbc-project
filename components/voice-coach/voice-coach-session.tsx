@@ -28,7 +28,10 @@ import {
   releaseMicrophoneForVoiceSession,
   VOICE_COACH_MIC_STABILIZATION_MS,
 } from "@/lib/voice-coach-microphone";
-import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
+import {
+  isVoiceCoachMode,
+  type VoiceCoachMode,
+} from "@/lib/voice-coach-modes";
 import {
   clearVoiceCoachDraft,
   saveVoiceCoachDraft,
@@ -1964,6 +1967,11 @@ function HistorySidebar({
               <p className={`mt-1.5 text-sm font-medium leading-snug ${theme.title}`}>
                 {formatConversationTitle(item, index)}
               </p>
+              {item.task ? (
+                <p className="mt-1 text-[10px] font-medium text-amber-400/90">
+                  Homework
+                </p>
+              ) : null}
             </button>
           );
         })}
@@ -1989,6 +1997,10 @@ function HistoryContent({
     return null;
   }
 
+  const historyMode: VoiceCoachMode = isVoiceCoachMode(selectedHistoryItem.mode)
+    ? selectedHistoryItem.mode
+    : "Interview";
+
   return (
     <section
       className={`flex max-h-[74vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111114] ${className}`}
@@ -2000,8 +2012,16 @@ function HistoryContent({
         <p className="mt-1 line-clamp-2 text-sm font-semibold text-white">
           {formatConversationTitle(selectedHistoryItem, Math.max(0, selectedHistoryIndex))}
         </p>
+        {selectedHistoryItem.summary ? (
+          <p className="mt-2 text-sm leading-relaxed text-[#9ca3af]">
+            {selectedHistoryItem.summary}
+          </p>
+        ) : null}
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
+        {selectedHistoryItem.task ? (
+          <HomeworkCard task={selectedHistoryItem.task} mode={historyMode} />
+        ) : null}
         {selectedHistoryMessages.length === 0 ? (
           <p className="text-sm text-[#9ca3af]">No transcript content found.</p>
         ) : (
