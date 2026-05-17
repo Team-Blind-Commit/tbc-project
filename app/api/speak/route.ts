@@ -6,6 +6,41 @@ import {
 
 const ELEVENLABS_TIMEOUT_MS = 60_000;
 
+type SpeakRole = "counter" | "grammarian" | "evaluator";
+
+const VOICE_SETTINGS: Record<
+  SpeakRole,
+  {
+    stability: number;
+    similarity_boost: number;
+    style?: number;
+    use_speaker_boost?: boolean;
+  }
+> = {
+  counter: { stability: 0.42, similarity_boost: 0.82, style: 0.25 },
+  grammarian: { stability: 0.5, similarity_boost: 0.8 },
+  evaluator: {
+    stability: 0.52,
+    similarity_boost: 0.72,
+    style: 0.05,
+    use_speaker_boost: false,
+  },
+};
+
+const MODEL_BY_ROLE: Record<SpeakRole, string> = {
+  counter: "eleven_turbo_v2_5",
+  grammarian: "eleven_turbo_v2_5",
+  evaluator: "eleven_flash_v2_5",
+};
+
+function prepareSpeakText(text: string, role: SpeakRole): string {
+  let out = text.replace(/\s+/g, " ").trim();
+  if (role === "evaluator") {
+    out = out.replace(/—/g, ", ").replace(/;\s*/g, ". ");
+  }
+  return out;
+}
+
 function elevenLabsErrorMessage(status: number, body: string): string {
   if (status === 401 || status === 402) {
     if (body.includes("quota") || body.includes("credit")) {
@@ -24,7 +59,11 @@ export async function POST(request: NextRequest) {
     const rateLimited = enforceRateLimit(request, "speak");
     if (rateLimited) return rateLimited;
 
-    const body = (await request.json()) as { text?: string; voiceId?: string };
+    const body = (await request.json()) as {
+      text?: string;
+      voiceId?: string;
+      role?: SpeakRole;
+    };
 
     if (!body.text || typeof body.text !== "string" || !body.text.trim()) {
       return NextResponse.json({ error: "text is required" }, { status: 400 });
@@ -37,7 +76,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const text = body.text.trim();
+    const role: SpeakRole =
+      body.role === "counter" ||
+      body.role === "grammarian" ||
+      body.role === "evaluator"
+        ? body.role
+        : "evaluator";
+
+    const text = prepareSpeakText(body.text.trim(), role);
     if (text.length < 12) {
       return NextResponse.json(
         { error: "Nothing to speak — record clearer speech first." },
@@ -60,6 +106,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const voiceSettings = VOICE_SETTINGS[role];
+    const modelId = MODEL_BY_ROLE[role];
+
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${body.voiceId}`,
       {
@@ -71,8 +120,8 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           text,
-          model_id: "eleven_multilingual_v2",
-          voice_settings: { stability: 0.5, similarity_boost: 0.8 },
+          model_id: modelId,
+          voice_settings: voiceSettings,
         }),
         signal: AbortSignal.timeout(ELEVENLABS_TIMEOUT_MS),
       },
