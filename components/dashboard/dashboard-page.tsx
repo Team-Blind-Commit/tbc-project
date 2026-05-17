@@ -72,19 +72,26 @@ export async function DashboardPage() {
     .join("") || "P";
 
   const latestSpeechEval = allSessions.find((row) => row.feature === "speech_eval");
+  const evaluatorStoredScore = latestSpeechEval
+    ? Number(latestSpeechEval.evaluator_score)
+    : NaN;
+  const hasEvaluatorScore = Number.isFinite(evaluatorStoredScore);
+  // Only Marcus (Evaluator) stores a numeric score in DB; Counter & Grammarian are qualitative feedback.
   const panelScores = [
     { name: "Counter", initial: "C", score: 0, color: "bg-[#8b5cf6]", bar: "bg-[#8b5cf6]" },
     { name: "Grammar", initial: "G", score: 0, color: "bg-teal-500", bar: "bg-teal-500" },
-    { name: "Evaluator", initial: "E", score: 0, color: "bg-blue-500", bar: "bg-blue-500" },
+    {
+      name: "Evaluator",
+      initial: "E",
+      score: hasEvaluatorScore ? evaluatorStoredScore : 0,
+      color: "bg-blue-500",
+      bar: "bg-blue-500",
+    },
   ];
-  if (latestSpeechEval) {
-    const evaluator = Number(latestSpeechEval.evaluator_score);
-    panelScores[2].score = Number.isFinite(evaluator) ? evaluator : 0;
-    panelScores[1].score = panelScores[2].score > 0 ? Math.max(0, panelScores[2].score - 0.5) : 0;
-    panelScores[0].score = panelScores[2].score > 0 ? Math.max(0, panelScores[2].score - 1) : 0;
-  }
-  const compositeValue =
-    panelScores.reduce((sum, row) => sum + row.score, 0) / panelScores.length;
+  const compositeValue = hasEvaluatorScore ? evaluatorStoredScore : 0;
+  const panelScoresNote = hasEvaluatorScore
+    ? "Composite uses Evaluator (Marcus) score from your last panel session. Counter and Grammarian feedback are qualitative."
+    : "Complete a Speech Evaluator session to see your panel score.";
 
   const trendBars = allSessions
     .slice(0, 5)
@@ -183,7 +190,10 @@ export async function DashboardPage() {
             <ActionPointsPanel />
             <BottomPanels
               panelScores={panelScores}
-              compositeScore={`${compositeValue.toFixed(1)} / 10`}
+              compositeScore={
+                hasEvaluatorScore ? `${compositeValue.toFixed(1)} / 10` : "—"
+              }
+              panelScoresNote={panelScoresNote}
               trendBars={trendBars}
               recentSessions={recentSessions}
             />

@@ -16,6 +16,7 @@ interface TopicSetupProps {
 export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
   const [topic, setTopic] = useState("");
   const [suggestion, setSuggestion] = useState("");
+  const [fromSurprise, setFromSurprise] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -24,11 +25,17 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
     setError("");
     setSuggestion("");
 
+    const previousTopic = fromSurprise && topic.trim() ? topic.trim() : undefined;
+
     try {
       const res = await fetch("/api/generate-topic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userInput: topic.trim() || undefined }),
+        body: JSON.stringify({
+          userInput: topic.trim() || undefined,
+          regenerate: Boolean(previousTopic),
+          previousTopic,
+        }),
       });
 
       if (!res.ok) {
@@ -39,6 +46,7 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
       const data = (await res.json()) as { topic: string; suggestion: string };
       setTopic(data.topic);
       setSuggestion(data.suggestion);
+      setFromSurprise(true);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Could not generate a topic",
@@ -50,9 +58,17 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
 
   return (
     <div className="mx-auto w-full max-w-lg space-y-6">
-      <h2 className="text-center text-2xl font-bold text-white">
-        What will you speak about?
-      </h2>
+      <div className="text-center">
+        <p className="text-xs font-medium uppercase tracking-wider text-teal-400/90">
+          Step 1
+        </p>
+        <h2 className="mt-2 text-2xl font-bold text-white">
+          What will you speak about?
+        </h2>
+        <p className="mt-2 text-sm text-gray-500">
+          Pick a topic, then record a 45–60 second practice speech for the panel.
+        </p>
+      </div>
 
       <div className="space-y-3">
         <input
@@ -60,6 +76,7 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
           value={topic}
           onChange={(e) => {
             setTopic(e.target.value);
+            setFromSurprise(false);
             setError("");
           }}
           placeholder="Type your own topic or use Surprise Me..."
@@ -77,7 +94,7 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
           ) : (
             <Sparkles className="h-4 w-4" />
           )}
-          ✨ Surprise Me
+          {fromSurprise ? "✨ Surprise Me Again" : "✨ Surprise Me"}
         </button>
 
         {suggestion ? (
@@ -114,6 +131,7 @@ export function TopicSetup({ onTopicConfirmed }: TopicSetupProps) {
               onClick={() => {
                 setTopic(example);
                 setSuggestion("");
+                setFromSurprise(false);
                 setError("");
               }}
               className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-gray-300 transition-colors hover:border-amber-500/40 hover:text-white"

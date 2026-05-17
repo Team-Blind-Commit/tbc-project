@@ -3,6 +3,12 @@ export interface AnalysisResult {
   counter: string;
   grammarian: string;
   evaluator: string;
+  /** Set by POST /api/analyze when the session row was saved to Supabase. */
+  persisted?: boolean;
+  sessionId?: string | null;
+  evaluatorScore?: number | null;
+  fillerWordCount?: number | null;
+  warning?: string;
 }
 
 export interface SelectedVoices {
@@ -19,6 +25,8 @@ export const VOICES = {
   adam: "pNInz6obpgDQGcFmaJgB",
   /** Male — mature, authoritative (Marcus alt) */
   arnold: "VR6AewLTigWG4xSOukaG",
+  /** Male — casual, conversational (Marcus default) */
+  charlie: "IKne3meq5aSn9XLyUdCD",
   /** Female — calm, articulate (Clara) */
   rachel: "21m00Tcm4TlvDq8ikWAM",
   /** Female — warm, expressive (Clara alt) */
@@ -28,7 +36,7 @@ export const VOICES = {
 export const DEFAULT_VOICES: SelectedVoices = {
   counter: VOICES.josh,
   grammarian: VOICES.rachel,
-  evaluator: VOICES.arnold,
+  evaluator: VOICES.charlie,
 };
 
 export const COUNTER_VOICES = [
@@ -42,8 +50,9 @@ export const GRAMMARIAN_VOICES = [
 ] as const;
 
 export const EVALUATOR_VOICES = [
+  { label: "Marcus — Conversational (male)", id: VOICES.charlie },
+  { label: "Marcus — Warm coach (male)", id: VOICES.josh },
   { label: "Marcus — Authoritative (male)", id: VOICES.arnold },
-  { label: "Marcus — Coach (male)", id: VOICES.adam },
 ] as const;
 
 export const FILLER_WORDS = [
