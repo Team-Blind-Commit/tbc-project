@@ -40,6 +40,11 @@ import {
   upsertVoiceCoachLocalHistoryItem,
   type VoiceCoachLocalHistoryItem,
 } from "@/lib/voice-coach-local-history";
+import { buildConversationHistoryTitle } from "@/lib/voice-coach-history-title";
+import {
+  resolveVoiceCoachHistoryModeTheme,
+  VOICE_COACH_MODE_LEGEND,
+} from "@/lib/voice-coach-mode-theme";
 
 type SessionPhase = "idle" | "loading" | "active" | "ending" | "done";
 type AuthMode = "signed" | "public";
@@ -447,12 +452,6 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   return { role, text: text.trim(), timestamp };
 }
 
-function summarizeMessageTitle(text: string): string {
-  const normalized = text.trim().replace(/\s+/g, " ");
-  if (!normalized) return "Untitled chat";
-  return normalized.length > 64 ? `${normalized.slice(0, 61).trim()}...` : normalized;
-}
-
 function formatConversationTitle(
   item: VoiceCoachHistoryItem,
   index: number,
@@ -683,10 +682,10 @@ function VoiceCoachSessionInner({
 
   const liveConversationItem = useMemo(() => {
     if (messages.length === 0) return null;
-    const firstMeaningfulMessage = messages.find((msg) => msg.text.trim().length > 0);
-    const title = firstMeaningfulMessage
-      ? summarizeMessageTitle(firstMeaningfulMessage.text)
-      : "Current conversation";
+    const title = buildConversationHistoryTitle({
+      mode,
+      messages: messages.filter((message) => message.text.trim().length > 0),
+    });
 
     const transcript = messages
       .map((message) => `[${message.role}] ${message.text}`)
@@ -1480,15 +1479,11 @@ function VoiceCoachSessionInner({
     if (!isMountedRef.current) return;
 
     const savedSessionId = createLocalSessionId();
-    const titleFromSummary = summaryText?.trim();
-    const titleFromMessage = savedMessages[0]?.text.trim();
-    const title = titleFromSummary
-      ? titleFromSummary.length > 80
-        ? `${titleFromSummary.slice(0, 77).trim()}...`
-        : titleFromSummary
-      : titleFromMessage
-        ? summarizeMessageTitle(titleFromMessage)
-        : `${mode} session`;
+    const title = buildConversationHistoryTitle({
+      mode,
+      messages: savedMessages,
+      summary: summaryText,
+    });
 
     setTask(taskText);
     setSummary(summaryText);
@@ -1909,6 +1904,19 @@ function HistorySidebar({
           New Chat
         </span>
       </div>
+      <div className="flex flex-wrap gap-1.5 border-b border-white/10 px-3 py-2">
+        {VOICE_COACH_MODE_LEGEND.map(({ mode, theme }) => (
+          <span
+            key={mode}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${theme.border} ${theme.background}`}
+          >
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${theme.dot}`} />
+            <span className={theme.modeLabel}>
+              {mode === "Impromptu Speaking" ? "Impromptu" : mode}
+            </span>
+          </span>
+        ))}
+      </div>
       <div className="max-h-[74vh] space-y-2 overflow-y-auto p-3">
         {historyLoading && (
           <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-[#9ca3af]">
@@ -1931,29 +1939,34 @@ function HistorySidebar({
             No chat history yet.
           </p>
         ) : null}
-        {items.map((item, index) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onSelect(item.id)}
-            className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-              selectedHistoryId === item.id
-                ? "border-[#8b5cf6]/55 bg-[#8b5cf6]/20 shadow-[0_0_0_1px_rgba(139,92,246,0.35)]"
-                : "border-white/10 bg-[#111114] hover:bg-white/[0.04]"
-            }`}
-          >
-            <p
-              className={`text-xs ${
-                selectedHistoryId === item.id ? "text-[#c4b5fd]" : "text-[#9ca3af]"
+        {items.map((item, index) => {
+          const theme = resolveVoiceCoachHistoryModeTheme(item.mode);
+          const isSelected = selectedHistoryId === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                isSelected
+                  ? `${theme.borderSelected} ${theme.backgroundSelected} ${theme.selectedShadow}`
+                  : `${theme.border} ${theme.background} ${theme.hover}`
               }`}
             >
-              {item.mode}
-            </p>
-            <p className="mt-1 text-sm font-medium text-white">
-              {formatConversationTitle(item, index)}
-            </p>
-          </button>
-        ))}
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${theme.dot}`} />
+                <p
+                  className={`text-xs font-semibold uppercase tracking-wide ${theme.modeLabel}`}
+                >
+                  {item.mode}
+                </p>
+              </div>
+              <p className={`mt-1.5 text-sm font-medium leading-snug ${theme.title}`}>
+                {formatConversationTitle(item, index)}
+              </p>
+            </button>
+          );
+        })}
       </div>
     </aside>
   );

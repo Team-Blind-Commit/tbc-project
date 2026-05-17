@@ -1,4 +1,8 @@
 import { createClient } from "@/lib/supabase/client";
+import {
+  buildConversationHistoryTitle,
+  refreshConversationHistoryTitle,
+} from "@/lib/voice-coach-history-title";
 
 export interface VoiceCoachLocalMessage {
   role: "user" | "agent";
@@ -94,7 +98,21 @@ export function readVoiceCoachLocalHistory(
 ): VoiceCoachLocalHistoryItem[] {
   const store = readStore();
   const items = store.users[userId] ?? [];
-  return [...items].sort(
+  let changed = false;
+  const refreshed = items.map((item) => {
+    const next = refreshConversationHistoryTitle(item);
+    if (next.title !== item.title) {
+      changed = true;
+    }
+    return next;
+  });
+
+  if (changed) {
+    store.users[userId] = refreshed;
+    writeStore(store);
+  }
+
+  return [...refreshed].sort(
     (a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
@@ -106,8 +124,17 @@ export function upsertVoiceCoachLocalHistoryItem(
 ): VoiceCoachLocalHistoryItem[] {
   const store = readStore();
   const current = store.users[userId] ?? [];
+  const titled: VoiceCoachLocalHistoryItem = {
+    ...item,
+    userId,
+    title: buildConversationHistoryTitle({
+      mode: item.mode,
+      messages: item.messages,
+      summary: item.summary,
+    }),
+  };
   const next = [
-    { ...item, userId },
+    titled,
     ...current.filter((entry) => entry.id !== item.id),
   ].slice(0, MAX_SESSIONS_PER_USER);
 
