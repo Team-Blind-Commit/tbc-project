@@ -5,6 +5,7 @@ import { FeedbackSection } from "./FeedbackSection";
 import { Footer } from "./Footer";
 import { HeroSection } from "./HeroSection";
 import { HowItWorksSection } from "./HowItWorksSection";
+import { LandingAIBackground } from "./LandingAIBackground";
 import { Navbar } from "./Navbar";
 import { ProblemSection } from "./ProblemSection";
 import { ProgressSection } from "./ProgressSection";
@@ -18,21 +19,24 @@ export function LandingPage() {
   return (
     <div
       id="podium-landing"
-      className="min-h-screen bg-[#050505] font-[family-name:var(--font-geist-sans)] text-white antialiased"
+      className="relative min-h-screen bg-[#050505] font-[family-name:var(--font-geist-sans)] text-white antialiased"
     >
-      <Navbar />
-      <main>
-        <HeroSection />
-        <ProblemSection />
-        <TwoWaysSection />
-        <HowItWorksSection />
-        <CoachesSection />
-        <FeedbackSection />
-        <ProgressSection />
-        <FeaturesBar />
-        <CtaSection />
-      </main>
-      <Footer />
+      <LandingAIBackground />
+      <div className="relative z-10">
+        <Navbar />
+        <main>
+          <HeroSection />
+          <ProblemSection />
+          <TwoWaysSection />
+          <HowItWorksSection />
+          <CoachesSection />
+          <FeedbackSection />
+          <ProgressSection />
+          <FeaturesBar />
+          <CtaSection />
+        </main>
+        <Footer />
+      </div>
     </div>
   );
 }
