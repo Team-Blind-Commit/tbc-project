@@ -159,9 +159,9 @@ export function DashboardSettingsPage({
 
         <form onSubmit={handleSaveProfile} className="mt-6 space-y-4">
           <div className="flex items-center gap-4">
-            <motionlessDashboardShell>
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-cyan-600 text-xl font-bold text-white">
               {initials}
-            </motionlessDashboardShell>
+            </div>
             <div className="min-w-0 flex-1">
               <label
                 htmlFor="settings-username"
@@ -204,7 +204,7 @@ export function DashboardSettingsPage({
           <div>
             <dt className="text-[#9ca3af]">Email</dt>
             <dd className="mt-1 font-medium text-white">{email ?? "—"}</dd>
-          </motionlessDashboardShell>
+          </div>
           <div>
             <dt className="text-[#9ca3af]">Sign-in method</dt>
             <dd className="mt-1 font-medium text-white">{provider}</dd>
