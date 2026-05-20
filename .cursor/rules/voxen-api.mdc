@@ -1,0 +1,143 @@
+---
+description: API routes, auth, LLM/ElevenLabs/Supabase patterns, persistence
+globs: app/api/**/*.ts,lib/**/*.ts,middleware.ts
+alwaysApply: false
+---
+
+# API & Integration Patterns
+
+## Route Handler Template
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { requireUser } from '@/lib/supabase/require-user'
+
+export async function POST(request: NextRequest) {
+  try {
+    const user = await requireUser() // omit for public routes (e.g. /api/speak)
+
+    const body = await request.json()
+    if (!body.requiredField || typeof body.requiredField !== 'string') {
+      return NextResponse.json({ error: 'requiredField is required' }, { status: 400 })
+    }
+
+    // ... logic ...
+
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    console.error('[route-name] error:', error)
+    return NextResponse.json({ error: 'Something went wrong' }, { status: 500 })
+  }
+}
+```
+
+- Validate types and bounds before external calls
+- Use `enforceRateLimit(request, 'analyze' | 'speak' | 'generate-topic')` from `@/lib/api-guards` on expensive routes
+- Prefer `FormData` for audio (`POST /api/analyze`); enforce `MAX_AUDIO_BYTES`
+- Client fetches: parse with `parseApiJson()` from `@/lib/parse-api-response`
+
+---
+
+## API Routes (current)
+
+| Route | Auth | Purpose |
+|-------|------|---------|
+| `POST /api/analyze` | Yes | STT + 3 judges + save `sessions` (`feature: speech_eval`) |
+| `POST /api/speak` | No* | ElevenLabs TTS for judge playback |
+| `POST /api/generate-topic` | Rate limit | Topic suggestions |
+| `GET /api/voice-coach/signed-url` | Yes | ElevenLabs ConvAI signed URL + `mode` + `memory` |
+| `POST /api/voice-coach/end-session` | Yes | Summarize transcript, save session + memory + tasks |
+| `GET /api/voice-coach/history` | Yes | Past voice sessions |
+| `PATCH /api/voice-coach/tasks` | Yes | Mark homework complete |
+| `GET /api/speech-eval/history` | Yes | Past panel sessions |
+| `POST /api/profile` | Yes | Create/update `profiles.username` |
+
+\*`speak` is rate-limited; panel runs only for signed-in users in practice.
+
+---
+
+## LLM — OpenAI primary, Groq fallback
+
+```typescript
+async function getJudgeFeedback(system: string, user: string): Promise<string> {
+  try {
+    const res = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: 280,
+      temperature: 0.75,
+    })
+    return res.choices[0]?.message?.content?.trim() ?? ''
+  } catch {
+    const res = await getGroq().chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: 280,
+      temperature: 0.75,
+    })
+    return res.choices[0]?.message?.content?.trim() ?? ''
+  }
+}
+```
+
+- Run Counter, Grammarian, Evaluator in parallel: `Promise.all([...])`
+- Judge copy is **spoken** via TTS — natural sentences, ~5–7 sentences, no markdown (see prompts in `app/api/analyze/route.ts`)
+- Voice coach summaries: `lib/summarize-voice-session.ts`; memory: `lib/build-coach-memory.ts`
+
+---
+
+## Speech-to-Text (`/api/analyze`)
+
+1. **Whisper** (`getOpenAI().audio.transcriptions`) first — saves ElevenLabs credits
+2. **ElevenLabs STT** fallback: `POST …/v1/speech-to-text`, `model_id=scribe_v1`
+3. Reject unclear audio via `assessTranscriptQuality()` (`422`, `code: unclear_audio`)
+
+---
+
+## Text-to-Speech (`/api/speak`)
+
+```
+POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}
+Headers: xi-api-key, Content-Type: application/json, Accept: audio/mpeg
+Body: { text, model_id: "eleven_multilingual_v2" }
+```
+
+Default judge voice IDs live in `lib/speech-eval.ts` (`DEFAULT_VOICES`); users can pick alternates in the Recorder UI. Do not change IDs without updating that file and testing playback.
+
+---
+
+## Voice Coach (ElevenLabs ConvAI)
+
+- Agent env: `ELEVENLABS_VOICE_COACH_AGENT_ID` — must be **Public** in ElevenLabs dashboard for WebRTC
+- Dynamic variables: `mode`, `memory` — system prompt in `lib/voice-coach-agent-prompt.ts`
+- Client connects via signed URL from `GET /api/voice-coach/signed-url?mode=…`
+- Persist **only on End session** (`POST /api/voice-coach/end-session`), not per message; draft recovery: `lib/voice-coach-draft.ts`
+
+Errors: `lib/elevenlabs-errors.ts`, `lib/voice-coach-connection-errors.ts`
+
+---
+
+## Supabase Schema (auth + RLS)
+
+| Table | Notes |
+|-------|--------|
+| `profiles` | `id` → `auth.users`, unique `username` |
+| `sessions` | `user_id`, `feature` (`speech_eval` \| `voice_coach`), judge columns, `evaluator_score`, `filler_word_count`, voice fields (`mode`, `summary`, `strengths`, `weaknesses`, `elevenlabs_conversation_id`) |
+| `action_points` | Homework tasks; `session_id`, `mode`, `task`, `completed` |
+| `user_coach_memory` | Per-user `memory_blob`, `current_goal`, `difficulty` |
+
+RLS: users read/write **own rows** only (`auth.uid() = user_id`). Server routes use the user’s Supabase session cookie via `createClient()` from `@/lib/supabase/server`.
+
+Migrations: `supabase/migrations/`. Full write/read map: `docs/supabase-persistence.md`.
+
+---
+
+## Environment Variables (`.env.local` only)
+
+See `.env.example`. Server-only: `OPENAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_COACH_AGENT_ID`. Client: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Restart `npm run dev` after changes.

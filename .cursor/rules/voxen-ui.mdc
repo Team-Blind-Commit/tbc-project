@@ -1,0 +1,56 @@
+---
+description: UI standards — theme, states, auth shell, client API patterns
+globs: "**/*.tsx"
+alwaysApply: false
+---
+
+# UI Standards
+
+## Theme
+
+- Background: near-black `#0a0a0a` / `bg-[#0a0a0a]`
+- Accent: amber/gold — `amber-500` / `#f59e0b` (one accent; no new brand colors)
+- Text: white headings, `text-gray-400` secondary
+- Brand name in UI: **Podium AI**
+
+## Layout
+
+- **Public:** landing (`components/landing/**`) — full-width marketing sections
+- **Auth:** `components/auth/**` inside `AuthShell` — login / signup / Google OAuth
+- **App:** `app/(protected)/**` with `components/dashboard/sidebar.tsx` + `top-bar.tsx` on dashboard; feature pages own their main content
+- Mobile-first: stack below `768px` (`md:` breakpoints)
+
+## Component Rules
+
+- Functional components only
+- Tailwind utilities only; no inline `style=`
+- `lucide-react` for icons
+- `@elevenlabs/react` only in `components/voice-coach/**` (ConvAI session UI)
+- No new UI libraries (shadcn, MUI, etc.) without agreement
+
+## States
+
+Every interactive flow should cover:
+
+| State | Behaviour |
+|-------|-----------|
+| idle | Default, awaiting action |
+| loading | Spinner/skeleton; disable inputs |
+| ready | Data loaded; user can proceed |
+| active | Recording, TTS playing, or live voice session |
+
+Use `transition` / `duration-*` between states.
+
+## Errors & API calls from the client
+
+- Show errors in the UI (`AuthAlert`, inline messages) — not `alert()` or console-only
+- `fetch('/api/…')` then `parseApiJson(res)`; handle `error`, `warning`, and domain codes (e.g. `unclear_audio`)
+- Loading indicators for every async step (analyze, speak, signed-url, end-session)
+
+## Feature-specific UI
+
+- **Speech eval:** `app/(protected)/speech-eval/components/` — `TopicSetup`, `Recorder`, `FeedbackCards`; voice picks from `lib/speech-eval.ts`
+- **Voice coach:** `components/voice-coach/` — mode selection, session, end-session flow
+- **Dashboard:** `components/dashboard/` — stats, practice cards, action points panel
+
+Match existing patterns in `components/` — do not redesign unless asked.

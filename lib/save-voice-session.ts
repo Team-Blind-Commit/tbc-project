@@ -1,0 +1,104 @@
+import { createClient } from "@/lib/supabase/server";
+import type { VoiceSessionSummary } from "@/lib/summarize-voice-session";
+import type { VoiceCoachMode } from "@/lib/voice-coach-modes";
+import type { VoiceCoachSessionMessageInput } from "@/lib/voice-coach-session-messages";
+
+export interface SaveVoiceSessionInput {
+  userId: string;
+  mode: VoiceCoachMode;
+  transcript: string;
+  durationSeconds: number;
+  conversationId?: string;
+  summary: VoiceSessionSummary;
+  messages?: VoiceCoachSessionMessageInput[];
+}
+
+/** Persists voice coach session + conversational memory (user_coach_memory) + tips (action_points). */
+export async function saveVoiceSession(
+  input: SaveVoiceSessionInput,
+): Promise<{ sessionId: string | null; error?: string; skipped?: boolean }> {
+  const supabase = await createClient();
+
+  const { data: sessionRow, error: sessionError } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: input.userId,
+      topic: input.mode,
+      feature: "voice_coach",
+      mode: input.mode,
+      duration_seconds: input.durationSeconds,
+      transcript: input.transcript.slice(0, 50000),
+      summary: input.summary.summary,
+      strengths: input.summary.strengths,
+      weaknesses: input.summary.weaknesses,
+      elevenlabs_conversation_id: input.conversationId ?? null,
+    })
+    .select("id")
+    .single();
+
+  if (sessionError) {
+    console.error("[save-voice-session] sessions insert:", sessionError.message);
+    return { sessionId: null, error: sessionError.message };
+  }
+
+  const sessionId = sessionRow.id as string;
+
+  if (input.messages && input.messages.length > 0) {
+    const messageRows = input.messages.map((message, index) => ({
+      session_id: sessionId,
+      user_id: input.userId,
+      role: message.role,
+      content: message.text.slice(0, 10_000),
+      sequence_index: index,
+      spoke_at: new Date(message.timestamp).toISOString(),
+    }));
+
+    const { error: messagesError } = await supabase
+      .from("session_messages")
+      .insert(messageRows);
+
+    if (messagesError) {
+      console.error(
+        "[save-voice-session] session_messages insert:",
+        messagesError.message,
+      );
+    }
+  }
+
+  const [memoryResult, taskResult] = await Promise.all([
+    supabase.from("user_coach_memory").upsert(
+      {
+        user_id: input.userId,
+        memory_blob: input.summary.memoryBlob,
+        current_goal: input.summary.currentGoal,
+        difficulty: input.summary.difficulty,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    ),
+    supabase.from("action_points").insert({
+      user_id: input.userId,
+      session_id: sessionId,
+      mode: input.mode,
+      task: input.summary.task,
+      points: [input.summary.task],
+      completed: false,
+    }),
+  ]);
+
+  if (memoryResult.error) {
+    console.error(
+      "[save-voice-session] memory upsert:",
+      memoryResult.error.message,
+    );
+  }
+
+  if (taskResult.error) {
+    console.error(
+      "[save-voice-session] action_points insert:",
+      taskResult.error.message,
+    );
+  }
+
+  return { sessionId };
+}

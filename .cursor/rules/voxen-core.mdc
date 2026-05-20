@@ -1,0 +1,95 @@
+---
+description: Core rules for Podium AI — stack, security, app structure, git
+alwaysApply: true
+---
+
+# Podium AI — AI Speech Coaching Platform
+
+Two products in one app:
+
+1. **Voice Coach** (`/voice-coach`) — Real-time spoken practice via ElevenLabs Conversational AI. Modes: Interview, Debate, Presentation, Impromptu Speaking.
+2. **Speech Evaluator** (`/speech-eval`) — Timed speech on a topic; three AI judges (Rex/Counter, Clara/Grammarian, Marcus/Evaluator) with scored feedback and TTS playback.
+
+Authenticated users get a **dashboard** (`/dashboard`) with history, stats, and voice-coach homework.
+
+---
+
+## Tech Stack
+
+- **Framework:** Next.js App Router (`app/`) — never `pages/`
+- **Language:** TypeScript only (`.ts` / `.tsx`)
+- **Styling:** Tailwind CSS v4 (`@import "tailwindcss"` in `globals.css`) — utility classes only; no extra `.css` files; no inline `style=`
+- **Auth & DB:** Supabase Auth + Postgres (`@supabase/ssr`, `@supabase/supabase-js`)
+- **LLM:** OpenAI GPT-4o via `getOpenAI()` / `@/lib/openai` — Groq `llama-3.3-70b-versatile` only in `catch` fallbacks via `getGroq()`
+- **Voice:** ElevenLabs STT/TTS + Conversational AI (`@elevenlabs/react` on Voice Coach UI only)
+- **Icons:** `lucide-react`
+- **Deploy:** Vercel — keep `npm run build` passing
+
+No model picker in the UI. GPT-4o is default; Groq is silent fallback.
+
+---
+
+## Security — never break these
+
+- **Server-only secrets:** `OPENAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_COACH_AGENT_ID`
+  - Use only in `app/api/**`, `lib/**` server modules, and Route Handlers
+  - Never in client components, never `NEXT_PUBLIC_`, never `console.log` keys/tokens
+- **Client-safe:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (anon key is public by design; RLS enforces row access)
+- **Auth:** Use `supabase.auth.getUser()` — not `getSession()` — for security-sensitive checks
+- **Protected routes:** `app/(protected)/**` uses `requireUser()` in layout; API routes that need login call `requireUser()` too
+- **Validate** every request body / FormData field before use; cap uploads via `@/lib/api-guards` (`MAX_AUDIO_BYTES`, `MAX_SPEAK_TEXT_LENGTH`, rate limits)
+- **try/catch** all external API calls; return JSON errors with correct HTTP status; log with `[route-name]` prefix
+- Never hardcode secrets; never commit `.env.local`
+
+---
+
+## App Structure (unified codebase)
+
+| Area | Path |
+|------|------|
+| Public landing | `app/page.tsx`, `components/landing/**` |
+| Auth | `app/login`, `app/signup`, `app/auth/callback`, `components/auth/**` |
+| Protected app | `app/(protected)/**` — dashboard, voice-coach, speech-eval |
+| API | `app/api/**` |
+| Shared logic | `lib/**` |
+| Dashboard UI | `components/dashboard/**` |
+| Voice Coach UI | `components/voice-coach/**` |
+| Session middleware | `middleware.ts` (Supabase cookie refresh) |
+
+Persistence details: `docs/supabase-persistence.md`. Run migrations in `supabase/migrations/` before expecting DB features.
+
+Prefer small, focused changes in the right folder — no separate “subteam” ownership; coordinate on shared `lib/`, `app/layout.tsx`, and dashboard when behavior crosses features.
+
+---
+
+## Shared Clients — import, do not reinitialize
+
+```typescript
+import { createClient } from '@/lib/supabase/server'   // Route Handlers & Server Components
+import { createClient } from '@/lib/supabase/client'  // Client Components only
+import { getOpenAI } from '@/lib/openai'
+import { getGroq } from '@/lib/groq'
+```
+
+Use `readEnv()` from `@/lib/elevenlabs-config` for ElevenLabs env vars (handles quoted values).
+
+---
+
+## Hard Rules
+
+- No OpenAI / Groq / ElevenLabs API calls from client components — use `app/api/*` (Voice Coach may use `@elevenlabs/react` with **signed URLs** from the server, not raw API keys)
+- No `any` without a short comment why
+- No empty `catch` — log and return a proper response
+- No committed `TODO`s in finished work
+- Do not redesign existing UI unless asked
+- New npm packages only when necessary and agreed
+
+---
+
+## Git
+
+- Never commit directly to `dev` or `main`
+- Branch: `feature/yourname-description`
+- Commits: `feat:`, `fix:`, `style:`, `chore:`
+- PR into `dev` when a chunk works end-to-end
+- `git pull origin dev` before new work
