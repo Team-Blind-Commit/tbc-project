@@ -6,7 +6,7 @@
 
 Podium AI is an AI-powered speaking coach that gives you real-time voice practice and expert-style feedback — without the cost of a human coach. Talk live with personality-driven AI coaches, or record a speech and face a panel of three AI judges who score your delivery, language, and content.
 
-> **Currently free for testing.** We’re actively improving the product and welcome your feedback. Paid subscriptions and additional features are planned for the future.
+> **Currently free for testing.** We’re actively improving the product and welcome your feedback.
 
 ---
 
@@ -86,86 +86,6 @@ Choose your mode  →  Practice or speak  →  Get your score
 | Voice Coach | [ElevenLabs Conversational AI](https://elevenlabs.io) (WebRTC) |
 | Speech Analysis | [Groq](https://groq.com) (transcription & evaluation) |
 | Summaries & Tasks | [OpenAI](https://openai.com) (post-session summaries, homework) |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 20+
-- A [Supabase](https://supabase.com) project
-- API keys for ElevenLabs, Groq, and OpenAI
-
-### Installation
-
-```bash
-git clone https://github.com/Team-Blind-Commit/tbc-project.git
-cd tbc-project
-npm install
-```
-
-### Environment Variables
-
-Copy the example file and fill in your values:
-
-```bash
-cp .env.example .env.local   # Windows: copy .env.example .env.local
-```
-
-| Variable | Purpose |
-|----------|---------|
-| `ELEVENLABS_API_KEY` | ElevenLabs API key (server-side only) |
-| `ELEVENLABS_VOICE_COACH_AGENT_ID` | Conversational AI agent ID |
-| `OPENAI_API_KEY` | Post-session summaries and homework tasks |
-| `GROQ_API_KEY` | Speech transcription and panel evaluation |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key (JWT format, `eyJ...`) |
-
-> **Important:** Keep all API keys server-side. Never prefix secrets with `NEXT_PUBLIC_`.
-
-### Database Setup
-
-Apply Supabase migrations in filename order before running the app:
-
-```bash
-# Run each file in supabase/migrations/ via Supabase Dashboard SQL editor,
-# or apply supabase/all_migrations.sql on a fresh project.
-```
-
-See [`docs/supabase-persistence.md`](docs/supabase-persistence.md) for the full schema reference and deploy checklist.
-
-### Run Locally
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000). Sign up or log in to access the dashboard, Voice Coach, and Face The Panel.
-
-Or try the hosted demo at [tbc-project-delta.vercel.app](https://tbc-project-delta.vercel.app/) — no local setup required.
-
----
-
-## Project Structure
-
-```
-app/
-├── (protected)/          # Auth-gated routes (dashboard, voice-coach, speech-eval)
-├── api/                  # Server-side API routes (analyze, speak, voice-coach, profile)
-├── auth/callback/        # OAuth callback handler
-├── login/ & signup/      # Authentication pages
-└── page.tsx              # Public landing page
-
-components/
-├── landing/              # Marketing site sections
-├── dashboard/            # Dashboard shell, stats, history, settings
-├── voice-coach/          # Live voice session UI
-└── auth/                 # Login and sign-up forms
-
-lib/                      # Server utilities, Supabase clients, AI integrations
-supabase/migrations/      # Database schema migrations
-```
 
 ---
 
